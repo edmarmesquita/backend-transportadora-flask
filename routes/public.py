@@ -1,3 +1,5 @@
+import re
+
 from flask import Blueprint, request
 
 from extensions import db
@@ -7,6 +9,8 @@ from utils.datas import formatar_data_brasilia
 
 
 public_bp = Blueprint("public", __name__)
+
+PADRAO_CODIGO_RASTREAMENTO = re.compile(r"^[A-Z0-9-]{2,30}$")
 
 
 @public_bp.route("/")
@@ -21,22 +25,26 @@ def index():
 def api_buscar_rastreamento(codigo):
     codigo = codigo.strip().upper()
 
+    if not PADRAO_CODIGO_RASTREAMENTO.fullmatch(codigo):
+        return {"erro": "Código de rastreamento inválido."}, 400
+
     carga = Rastreamento.query.filter_by(codigo=codigo).first()
 
     if not carga:
-        return {"erro": "Código de rastreamento não encontrado."}, 404
+        return {"erro": "Rastreamento não encontrado."}, 404
 
     ultima_atualizacao = ""
     if carga.ultima_atualizacao:
         ultima_atualizacao = formatar_data_brasilia(carga.ultima_atualizacao)
 
+    previsao_entrega = ""
+    if carga.previsao_entrega:
+        previsao_entrega = formatar_data_brasilia(carga.previsao_entrega)
+
     return {
-        "id": carga.id,
         "codigo": carga.codigo,
-        "cliente": carga.cliente,
         "status": carga.status,
-        "local_atual": carga.local_atual,
-        "destino": carga.destino,
+        "previsao_entrega": previsao_entrega,
         "ultima_atualizacao": ultima_atualizacao
     }, 200
 

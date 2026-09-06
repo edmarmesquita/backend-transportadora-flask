@@ -8,6 +8,7 @@ from models.clientes import Cliente
 from models.cotacoes import Carga, Cotacao
 from models.operacao import Rastreamento
 from models.usuarios import UsuarioSistema
+from services.codigos_rastreamento import gerar_codigo_rastreamento
 
 
 admin_cotacoes_bp = Blueprint(
@@ -96,7 +97,7 @@ def aprovar_cotacao(id):
         db.session.flush()
 
         rastreamento = Rastreamento(
-            codigo="TEMPORARIO",
+            codigo=gerar_codigo_rastreamento(),
             cliente=cliente_textual,
             cliente_id=cliente_selecionado.id,
             status="Pendente",
@@ -107,10 +108,6 @@ def aprovar_cotacao(id):
 
         db.session.add(rastreamento)
         db.session.flush()
-
-        rastreamento.codigo = (
-            f"CG-{rastreamento.id:05d}"
-        )
 
         db.session.commit()
 

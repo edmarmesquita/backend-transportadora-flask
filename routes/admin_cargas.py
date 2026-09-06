@@ -14,6 +14,7 @@ from services.recursos import (
     recalcular_disponibilidade_motorista,
     recalcular_status_veiculo,
 )
+from services.codigos_rastreamento import gerar_codigo_rastreamento
 from utils.constantes import (
     STATUS_CARGA_ATIVOS_RECURSOS,
     STATUS_VIAGEM_ATIVOS_RECURSOS,
@@ -164,7 +165,7 @@ def api_criar_carga():
 
     dados = request.get_json()
 
-    codigo = dados.get("codigo", "").strip().upper()
+    codigo = gerar_codigo_rastreamento()
     cliente_id_recebido = dados.get("cliente_id")
 
     if cliente_id_recebido not in [None, ""]:
@@ -286,7 +287,6 @@ def api_editar_carga(id):
     # Guarda os dados anteriores antes de alterar
     local_anterior = carga.local_atual
 
-    carga.codigo = dados.get("codigo", "").strip().upper()
     carga.cliente = cliente
 
     if cliente_id is not None:
