@@ -1,9 +1,7 @@
 from datetime import datetime
-import os
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
-from werkzeug.utils import secure_filename
 
 from extensions import db
 from models.comprovantes import (
@@ -22,7 +20,11 @@ from services.recursos import (
     recalcular_status_veiculo,
     veiculo_possui_status_especial,
 )
-from utils.arquivos import extensao_arquivo_permitida
+from utils.arquivos import (
+    ErroValidacaoArquivo,
+    remover_arquivo_criado,
+    salvar_arquivo_upload,
+)
 from utils.datas import formatar_data_brasilia
 
 
@@ -416,40 +418,20 @@ def api_upload_arquivo_comprovante_motorista(id):
 
     arquivo = request.files.get("arquivo")
 
-    if not arquivo:
+    if not arquivo or not arquivo.filename:
         return jsonify({
             "erro": "Nenhum arquivo enviado."
         }), 400
 
-    if not extensao_arquivo_permitida(
-        arquivo.filename,
-        current_app.config["ALLOWED_EXTENSIONS"],
-    ):
-        return jsonify({
-            "erro": "Tipo de arquivo não permitido."
-        }), 400
-
-    nome_seguro = secure_filename(
-        arquivo.filename
-    )
-
-    if not nome_seguro:
-        return jsonify({
-            "erro": "Arquivo inválido."
-        }), 400
-
-    nome_final = (
-        f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_"
-        f"{nome_seguro}"
-    )
-
-    caminho = os.path.join(
-        current_app.config["UPLOAD_FOLDER"],
-        nome_final
-    )
+    caminho = None
 
     try:
-        arquivo.save(caminho)
+        nome_seguro, nome_final, caminho = salvar_arquivo_upload(
+            arquivo,
+            current_app.config["UPLOAD_FOLDER"],
+            current_app.config["ALLOWED_EXTENSIONS"],
+            current_app.config["UPLOAD_MAX_FILE_SIZE"]
+        )
 
         registro = ArquivoComprovanteViagem(
             viagem_id=viagem.id,
@@ -476,18 +458,13 @@ def api_upload_arquivo_comprovante_motorista(id):
             )
         }), 201
 
+    except ErroValidacaoArquivo as erro:
+        return jsonify({"erro": erro.mensagem}), erro.status_code
     except Exception as erro:
         db.session.rollback()
-
-        if os.path.exists(caminho):
-            try:
-                os.remove(caminho)
-            except OSError:
-                pass
-
-        print(
-            "ERRO AO ENVIAR COMPROVANTE PELO MOTORISTA:",
-            erro
+        remover_arquivo_criado(caminho, current_app.logger)
+        current_app.logger.exception(
+            "Erro ao persistir comprovante enviado pelo motorista."
         )
 
         return jsonify({

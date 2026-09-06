@@ -1,9 +1,7 @@
 from datetime import datetime
-import os
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
-from werkzeug.utils import secure_filename
 
 from extensions import db
 from models.comprovantes import (
@@ -22,7 +20,11 @@ from services.recursos import (
     recalcular_status_veiculo,
     veiculo_possui_status_especial,
 )
-from utils.arquivos import extensao_arquivo_permitida
+from utils.arquivos import (
+    ErroValidacaoArquivo,
+    remover_arquivo_criado,
+    salvar_arquivo_upload,
+)
 from utils.constantes import STATUS_VIAGEM_ATIVOS_RECURSOS
 from utils.datas import formatar_data_brasilia
 
@@ -518,43 +520,42 @@ def api_upload_arquivo_comprovante(id):
 
     arquivo = request.files.get("arquivo")
 
-    if not arquivo:
+    if not arquivo or not arquivo.filename:
         return {"erro": "Nenhum arquivo enviado."}, 400
 
-    if not extensao_arquivo_permitida(
-        arquivo.filename,
-        current_app.config["ALLOWED_EXTENSIONS"],
-    ):
-        return {"erro": "Tipo de arquivo não permitido."}, 400
+    caminho = None
 
-    nome_seguro = secure_filename(arquivo.filename)
+    try:
+        nome_seguro, nome_final, caminho = salvar_arquivo_upload(
+            arquivo,
+            current_app.config["UPLOAD_FOLDER"],
+            current_app.config["ALLOWED_EXTENSIONS"],
+            current_app.config["UPLOAD_MAX_FILE_SIZE"]
+        )
 
-    if not nome_seguro:
-        return {"erro": "Arquivo inválido."}, 400
+        registro = ArquivoComprovanteViagem(
+            viagem_id=id,
+            nome_arquivo=nome_final
+        )
 
-    nome_final = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{nome_seguro}"
+        historico = HistoricoViagem(
+            viagem_id=id,
+            status="Comprovante anexado",
+            observacao=f"Arquivo anexado: {nome_seguro}"
+        )
 
-    caminho = os.path.join(
-        current_app.config["UPLOAD_FOLDER"],
-        nome_final
-    )
-
-    arquivo.save(caminho)
-
-    registro = ArquivoComprovanteViagem(
-        viagem_id=id,
-        nome_arquivo=nome_final
-    )
-
-    historico = HistoricoViagem(
-        viagem_id=id,
-        status="Comprovante anexado",
-        observacao=f"Arquivo anexado: {nome_seguro}"
-    )
-
-    db.session.add(registro)
-    db.session.add(historico)
-    db.session.commit()
+        db.session.add(registro)
+        db.session.add(historico)
+        db.session.commit()
+    except ErroValidacaoArquivo as erro:
+        return {"erro": erro.mensagem}, erro.status_code
+    except Exception as erro:
+        db.session.rollback()
+        remover_arquivo_criado(caminho, current_app.logger)
+        current_app.logger.exception(
+            "Erro ao persistir comprovante administrativo."
+        )
+        return {"erro": "Não foi possível enviar o arquivo."}, 500
 
     return {
         "mensagem": "Arquivo do comprovante enviado com sucesso!"

@@ -19,10 +19,12 @@ from config import (
     FLASK_DEBUG,
     JWT_ACCESS_TOKEN_EXPIRES,
     JWT_SECRET_KEY,
+    MAX_CONTENT_LENGTH,
     SQLALCHEMY_DATABASE_URI,
     SQLALCHEMY_TRACK_MODIFICATIONS,
     USAR_COMPATIBILIDADE_SCHEMA_SQLITE,
-    UPLOAD_FOLDER as upload_folder
+    UPLOAD_FOLDER as upload_folder,
+    UPLOAD_MAX_FILE_SIZE
 )
 from extensions import cors, db, jwt
 from utils.senhas import gerar_hash_senha
@@ -36,6 +38,8 @@ app.config["JWT_SECRET_KEY"] = JWT_SECRET_KEY
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = JWT_ACCESS_TOKEN_EXPIRES
 app.config["UPLOAD_FOLDER"] = upload_folder
 app.config["ALLOWED_EXTENSIONS"] = ALLOWED_EXTENSIONS
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+app.config["UPLOAD_MAX_FILE_SIZE"] = UPLOAD_MAX_FILE_SIZE
 app.config["SQLALCHEMY_DATABASE_URI"] = SQLALCHEMY_DATABASE_URI
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = SQLALCHEMY_TRACK_MODIFICATIONS
 
@@ -54,6 +58,13 @@ cors.init_app(
     allow_headers=CORS_ALLOW_HEADERS,
     methods=CORS_METHODS
 )
+
+
+@app.errorhandler(413)
+def arquivo_muito_grande(_erro):
+    return {
+        "erro": "Arquivo excede o limite máximo permitido de 10 MB."
+    }, 413
 
 from models.usuarios import UsuarioSistema
 from models.auditoria import LogAcao

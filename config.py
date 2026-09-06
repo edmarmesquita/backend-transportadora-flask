@@ -159,5 +159,7 @@ else:
     UPLOAD_FOLDER = os.path.join(BASE_DIR, "static", "uploads")
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "pdf"}
+UPLOAD_MAX_FILE_SIZE = 10 * 1024 * 1024
+MAX_CONTENT_LENGTH = UPLOAD_MAX_FILE_SIZE + (1024 * 1024)
 
 SQLALCHEMY_TRACK_MODIFICATIONS = False
