@@ -2,6 +2,10 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from extensions import db
+from services.recursos import (
+    veiculo_possui_outra_carga_ativa,
+    veiculo_possui_outra_viagem_ativa,
+)
 from models.recursos import Veiculo
 from models.usuarios import UsuarioSistema
 
@@ -136,6 +140,17 @@ def api_inativar_veiculo(id):
 
     veiculo = Veiculo.query.get_or_404(id)
 
+    if (
+        veiculo_possui_outra_viagem_ativa(veiculo.id)
+        or veiculo_possui_outra_carga_ativa(veiculo.id)
+    ):
+        return jsonify({
+            "erro": (
+                "Não é possível inativar este veículo enquanto "
+                "houver viagem ou carga ativa."
+            )
+        }), 409
+
     veiculo.status = "Inativo"
 
     db.session.commit()
@@ -227,6 +242,18 @@ def api_editar_veiculo(id):
                 "ou inativar veículos."
             )
         }), 403
+
+
+    if novo_status.lower() == "inativo" and (
+        veiculo_possui_outra_viagem_ativa(veiculo.id)
+        or veiculo_possui_outra_carga_ativa(veiculo.id)
+    ):
+        return jsonify({
+            "erro": (
+                "Não é possível inativar este veículo enquanto "
+                "houver viagem ou carga ativa."
+            )
+        }), 409
 
     veiculo.placa = dados.get("placa", veiculo.placa)
     veiculo.modelo = dados.get("modelo", veiculo.modelo)

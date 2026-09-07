@@ -25,7 +25,11 @@ from utils.arquivos import (
     remover_arquivo_criado,
     salvar_arquivo_upload,
 )
-from utils.constantes import STATUS_VIAGEM_ATIVOS_RECURSOS
+from utils.constantes import (
+    STATUS_VIAGEM_ATIVOS_RECURSOS,
+    TRANSICOES_VIAGEM,
+    transicao_viagem_permitida,
+)
 from utils.datas import formatar_data_brasilia
 
 
@@ -200,19 +204,18 @@ def api_atualizar_status_viagem(id):
         dados.get("status", "")
     ).strip()
 
-    status_permitidos = [
-        "Em coleta",
-        "Carregando",
-        "Em trânsito",
-        "Parada operacional",
-        "Saiu para entrega",
-        "Cancelada"
-    ]
-
-    if novo_status not in status_permitidos:
+    if novo_status not in TRANSICOES_VIAGEM:
         return jsonify({
             "erro": "Status inválido."
         }), 400
+
+    if not transicao_viagem_permitida(viagem.status, novo_status):
+        return jsonify({
+            "erro": (
+                f"Transição de '{viagem.status}' para "
+                f"'{novo_status}' não permitida."
+            )
+        }), 409
 
     motorista = db.session.get(
         Motorista,
@@ -726,6 +729,11 @@ def api_finalizar_viagem(viagem_id):
             "erro": "Não é possível finalizar uma viagem cancelada."
         }), 409
 
+    if viagem.status != "Saiu para entrega":
+        return jsonify({
+            "erro": "A viagem precisa estar em 'Saiu para entrega' para ser finalizada."
+        }), 409
+
     dados = request.get_json() or {}
 
     recebedor = str(
@@ -901,7 +909,6 @@ def api_despachar_viagem():
             "erro": "Selecione uma carga."
         }), 400
 
-
     if not motorista_id:
         return jsonify({
             "erro": "Selecione um motorista."
@@ -952,15 +959,7 @@ def api_despachar_viagem():
             "erro": "Veículo não encontrado."
         }), 404
 
-    status_viagem_ativos = [
-    "Planejada",
-    "Em andamento",
-    "Em coleta",
-    "Carregando",
-    "Em trânsito",
-    "Parada operacional",
-    "Saiu para entrega"
-]
+    status_viagem_ativos = STATUS_VIAGEM_ATIVOS_RECURSOS
 
     viagem_aberta_carga = Viagem.query.filter(
         Viagem.rastreamento_id == carga.id,
@@ -1046,7 +1045,7 @@ def api_despachar_viagem():
             veiculo_id=veiculo.id,
             origem=origem,
             destino=destino,
-            status="Em andamento",
+            status="Em trânsito",
             data_saida=data_saida,
             previsao_entrega=previsao_entrega
         )
@@ -1145,15 +1144,7 @@ def api_opcoes_despacho_viagem():
             "erro": "Você não possui permissão para acessar viagens."
         }), 403
 
-    status_viagem_ativos = [
-        "Planejada",
-        "Em andamento",
-        "Em coleta",
-        "Carregando",
-        "Em trânsito",
-        "Parada operacional",
-        "Saiu para entrega"
-    ]
+    status_viagem_ativos = STATUS_VIAGEM_ATIVOS_RECURSOS
 
     cargas_ocupadas = db.session.query(
         Viagem.rastreamento_id

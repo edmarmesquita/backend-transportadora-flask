@@ -15,6 +15,21 @@ admin_usuarios_bp = Blueprint(
 )
 
 
+def _usuario_e_ultimo_administrador_ativo(usuario):
+    if not usuario or not usuario.ativo:
+        return False
+
+    if str(usuario.perfil).strip().lower() != "administrador":
+        return False
+
+    quantidade = UsuarioSistema.query.filter(
+        UsuarioSistema.ativo.is_(True),
+        db.func.lower(db.func.trim(UsuarioSistema.perfil)) == "administrador",
+    ).count()
+
+    return quantidade <= 1
+
+
 @admin_usuarios_bp.route(
     "/api/admin/usuarios/<int:id>/inativar",
     methods=["POST"]
@@ -56,6 +71,11 @@ def api_inativar_usuario(id):
         return jsonify({
             "mensagem": "Este usuário já está inativo."
         }), 200
+
+    if _usuario_e_ultimo_administrador_ativo(usuario):
+        return jsonify({
+            "erro": "Não é possível inativar o último administrador ativo."
+        }), 409
 
     try:
         dados_antes = {
@@ -423,6 +443,17 @@ def api_editar_usuario(id):
         "ativo",
         usuario.ativo
     )
+
+    if (
+        _usuario_e_ultimo_administrador_ativo(usuario)
+        and (perfil != "administrador" or not bool(ativo))
+    ):
+        return jsonify({
+            "erro": (
+                "O último administrador ativo não pode ser inativado "
+                "nem perder o perfil administrador."
+            )
+        }), 409
 
     if not nome:
         return jsonify({

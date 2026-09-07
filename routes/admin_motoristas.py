@@ -2,6 +2,10 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from extensions import db
+from utils.constantes import (
+    STATUS_CARGA_ATIVOS_RECURSOS,
+    STATUS_VIAGEM_ATIVOS_RECURSOS,
+)
 from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista
 from models.usuarios import UsuarioSistema
@@ -244,26 +248,8 @@ def api_inativar_motorista(motorista_id):
             "erro": "Motorista não encontrado."
         }), 404
 
-    status_viagem_ativos = [
-        "Planejada",
-        "Em andamento",
-        "Em coleta",
-        "Carregando",
-        "Em trânsito",
-        "Parada operacional",
-        "Saiu para entrega"
-    ]
-
-    status_carga_ativos = [
-        "Pendente",
-        "Programada",
-        "Em preparação",
-        "Carregando",
-        "Em coleta",
-        "Em trânsito",
-        "Parada operacional",
-        "Saiu para entrega"
-    ]
+    status_viagem_ativos = STATUS_VIAGEM_ATIVOS_RECURSOS
+    status_carga_ativos = STATUS_CARGA_ATIVOS_RECURSOS
 
     viagem_ativa = Viagem.query.filter(
         Viagem.motorista_id == motorista.id,
@@ -380,26 +366,8 @@ def api_editar_motorista(id):
     )
 
     if alterando_para_inativo:
-        status_viagem_ativos = [
-            "Planejada",
-            "Em andamento",
-            "Em coleta",
-            "Carregando",
-            "Em trânsito",
-            "Parada operacional",
-            "Saiu para entrega"
-        ]
-
-        status_carga_ativos = [
-            "Pendente",
-            "Programada",
-            "Em preparação",
-            "Carregando",
-            "Em coleta",
-            "Em trânsito",
-            "Parada operacional",
-            "Saiu para entrega"
-        ]
+        status_viagem_ativos = STATUS_VIAGEM_ATIVOS_RECURSOS
+        status_carga_ativos = STATUS_CARGA_ATIVOS_RECURSOS
 
         viagem_ativa = Viagem.query.filter(
             Viagem.motorista_id == motorista.id,

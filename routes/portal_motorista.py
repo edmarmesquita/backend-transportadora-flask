@@ -26,6 +26,7 @@ from utils.arquivos import (
     salvar_arquivo_upload,
 )
 from utils.datas import formatar_data_brasilia
+from utils.constantes import TRANSICOES_VIAGEM, transicao_viagem_permitida
 
 
 portal_motorista_bp = Blueprint(
@@ -102,21 +103,26 @@ def api_atualizar_status_viagem_motorista(id):
         dados.get("status", "")
     ).strip()
 
-    status_permitidos = [
-        "Em coleta",
-        "Carregando",
-        "Em trânsito",
-        "Parada operacional",
-        "Saiu para entrega",
-    ]
+    status_permitidos_motorista = {
+        "Em coleta", "Carregando", "Em trânsito",
+        "Parada operacional", "Saiu para entrega",
+    }
 
-    if novo_status not in status_permitidos:
+    if novo_status not in status_permitidos_motorista:
         return jsonify({
             "erro": (
                 "Este status não pode ser definido "
                 "pelo motorista."
             )
         }), 400
+
+    if not transicao_viagem_permitida(viagem.status, novo_status):
+        return jsonify({
+            "erro": (
+                f"Transição de '{viagem.status}' para "
+                f"'{novo_status}' não permitida."
+            )
+        }), 409
 
     carga = db.session.get(
         Rastreamento,
@@ -1120,6 +1126,11 @@ def api_finalizar_viagem_motorista(viagem_id):
     if status_atual == "entregue":
         return jsonify({
             "erro": "Esta viagem já foi finalizada."
+        }), 409
+
+    if viagem.status != "Saiu para entrega":
+        return jsonify({
+            "erro": "A viagem precisa estar em 'Saiu para entrega' para ser finalizada."
         }), 409
 
     dados = request.get_json(silent=True) or {}

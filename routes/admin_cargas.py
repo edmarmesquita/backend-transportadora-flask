@@ -17,7 +17,11 @@ from services.recursos import (
 from services.codigos_rastreamento import gerar_codigo_rastreamento
 from utils.constantes import (
     STATUS_CARGA_ATIVOS_RECURSOS,
+    STATUS_CARGA_EXCLUSAO_PERMITIDA,
+    STATUS_CARGA_INICIAIS,
     STATUS_VIAGEM_ATIVOS_RECURSOS,
+    TRANSICOES_CARGA,
+    transicao_carga_permitida,
 )
 from utils.valores import converter_valor_brasileiro
 
@@ -191,6 +195,11 @@ def api_criar_carga():
         cliente = dados.get("cliente", "").strip()
 
     status = dados.get("status", "").strip()
+
+    if status not in STATUS_CARGA_INICIAIS:
+        return jsonify({
+            "erro": "Status inicial de carga inválido."
+        }), 400
     local_atual = dados.get("local_atual", "").strip()
     destino = dados.get("destino", "").strip()
 
@@ -371,16 +380,7 @@ def api_excluir_carga(id):
             "erro": "Carga não encontrada."
         }), 404
 
-    status_bloqueados = [
-        "Em coleta",
-        "Carregando",
-        "Em trânsito",
-        "Parada operacional",
-        "Saiu para entrega",
-        "Entregue"
-    ]
-
-    if carga.status in status_bloqueados:
+    if carga.status not in STATUS_CARGA_EXCLUSAO_PERMITIDA:
         return jsonify({
             "erro": (
                 f"Não é possível excluir uma carga "
@@ -1089,14 +1089,7 @@ def atualizar_status_carga(id):
             "erro": "O status é obrigatório."
         }), 400
 
-    status_permitidos = [
-        "Pendente",
-        "Programada",
-        "Em preparação",
-        "Carregando"
-        ]
-
-    if novo_status not in status_permitidos:
+    if novo_status not in TRANSICOES_CARGA:
      return jsonify({
             "erro": "Status inválido."
         }), 400
@@ -1107,6 +1100,14 @@ def atualizar_status_carga(id):
         return jsonify({
             "erro": "Carga não encontrada."
         }), 404
+
+    if not transicao_carga_permitida(carga.status, novo_status):
+        return jsonify({
+            "erro": (
+                f"Transição de '{carga.status}' para "
+                f"'{novo_status}' não permitida."
+            )
+        }), 409
 
     viagem = Viagem.query.filter_by(
         rastreamento_id=carga.id
