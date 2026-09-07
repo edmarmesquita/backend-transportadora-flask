@@ -1,5 +1,3 @@
-import hmac
-
 from werkzeug.security import (
     check_password_hash,
     generate_password_hash,
@@ -41,7 +39,4 @@ def verificar_senha(valor_armazenado, senha_informada):
         except (TypeError, ValueError):
             return False
 
-    return hmac.compare_digest(
-        valor_armazenado,
-        senha_informada,
-    )
+    return False

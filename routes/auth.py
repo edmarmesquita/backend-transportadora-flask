@@ -12,7 +12,6 @@ from models.usuarios import UsuarioSistema
 from services.auditoria import registrar_log
 from utils.senhas import (
     gerar_hash_senha,
-    senha_esta_em_hash,
     verificar_senha,
 )
 
@@ -49,42 +48,6 @@ def api_login():
         return {
             "erro": "Usuário ou senha inválidos."
         }, 401
-
-    if not senha_esta_em_hash(usuario.senha):
-        senha_legada = usuario.senha
-        senha_hash = gerar_hash_senha(senha_digitada)
-
-        usuario.senha = senha_hash
-
-        cliente_usuario = ClienteUsuario.query.filter_by(
-            usuario_sistema_id=usuario.id
-        ).first()
-
-        if (
-            cliente_usuario
-            and not senha_esta_em_hash(cliente_usuario.senha)
-            and verificar_senha(
-                cliente_usuario.senha,
-                senha_legada,
-            )
-        ):
-            cliente_usuario.senha = senha_hash
-
-        motorista = Motorista.query.filter_by(
-            usuario_sistema_id=usuario.id
-        ).first()
-
-        if (
-            motorista
-            and not senha_esta_em_hash(motorista.senha)
-            and verificar_senha(
-                motorista.senha,
-                senha_legada,
-            )
-        ):
-            motorista.senha = senha_hash
-
-        db.session.commit()
 
     access_token = create_access_token(
         identity=str(usuario.id),

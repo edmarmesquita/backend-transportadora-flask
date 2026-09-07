@@ -117,12 +117,6 @@ ADMIN_BOOTSTRAP_SENHA = os.environ.get(
     ""
 ).strip()
 
-CLIENTE_TESTE_EMAIL = os.environ.get(
-    "CLIENTE_TESTE_EMAIL",
-    "cliente@infinity.com"
-)
-CLIENTE_TESTE_SENHA = os.environ.get("CLIENTE_TESTE_SENHA", "123456")
-
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_PATH_LOCAL = os.path.join(BASE_DIR, "database.db")
 _database_url_ambiente = os.environ.get("DATABASE_URL", "").strip()
