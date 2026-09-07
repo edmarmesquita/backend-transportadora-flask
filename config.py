@@ -40,6 +40,21 @@ if not 1 <= APP_PORT <= 65535:
 
 FLASK_DEBUG = _obter_booleano_ambiente("FLASK_DEBUG", False)
 
+_trusted_proxy_hops_ambiente = os.environ.get(
+    "TRUSTED_PROXY_HOPS",
+    "0"
+).strip()
+
+try:
+    TRUSTED_PROXY_HOPS = int(_trusted_proxy_hops_ambiente)
+except ValueError as erro:
+    raise RuntimeError(
+        "TRUSTED_PROXY_HOPS deve ser um número inteiro."
+    ) from erro
+
+if TRUSTED_PROXY_HOPS < 0:
+    raise RuntimeError("TRUSTED_PROXY_HOPS não pode ser negativo.")
+
 
 JWT_SECRET_KEY = os.environ.get(
     "JWT_SECRET_KEY",

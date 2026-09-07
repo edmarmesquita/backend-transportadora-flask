@@ -15,6 +15,7 @@ from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista, Veiculo
 from models.usuarios import UsuarioSistema
 from services.historicos import registrar_historico
+from services.rate_limit import verificar_limite
 from services.recursos import (
     recalcular_disponibilidade_motorista,
     recalcular_status_veiculo,
@@ -488,6 +489,12 @@ def api_consultar_comprovante(id):
 @jwt_required()
 def api_upload_arquivo_comprovante(id):
     usuario_id = int(get_jwt_identity())
+    resposta_limite = verificar_limite([
+        (f"upload:usuario:{usuario_id}", 10, 60)
+    ])
+    if resposta_limite:
+        return resposta_limite
+
     usuario = db.session.get(UsuarioSistema, usuario_id)
 
     if not usuario or not usuario.ativo:

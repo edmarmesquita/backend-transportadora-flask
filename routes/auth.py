@@ -10,6 +10,7 @@ from models.clientes import ClienteUsuario
 from models.recursos import Motorista
 from models.usuarios import UsuarioSistema
 from services.auditoria import registrar_log
+from services.rate_limit import chave_ip, verificar_limite
 from utils.senhas import (
     gerar_hash_senha,
     verificar_senha,
@@ -30,6 +31,12 @@ def api_login():
     senha_digitada = str(
         dados.get("senha", "")
     ).strip()
+
+    resposta_limite = verificar_limite([
+        (chave_ip(request, "login"), 5, 60)
+    ])
+    if resposta_limite:
+        return resposta_limite
 
     if not usuario_digitado or not senha_digitada:
         return {

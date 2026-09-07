@@ -5,6 +5,7 @@ from flask import Blueprint, request
 from extensions import db
 from models.cotacoes import Cotacao
 from models.operacao import Rastreamento
+from services.rate_limit import chave_ip, verificar_limite
 from utils.datas import formatar_data_brasilia
 
 
@@ -23,6 +24,12 @@ def index():
 
 @public_bp.route("/api/rastreamento/<codigo>", methods=["GET"])
 def api_buscar_rastreamento(codigo):
+    resposta_limite = verificar_limite([
+        (chave_ip(request, "rastreamento"), 30, 60)
+    ])
+    if resposta_limite:
+        return resposta_limite
+
     codigo = codigo.strip().upper()
 
     if not PADRAO_CODIGO_RASTREAMENTO.fullmatch(codigo):
@@ -51,6 +58,13 @@ def api_buscar_rastreamento(codigo):
 
 @public_bp.route("/api/cotacoes", methods=["POST"])
 def api_criar_cotacao_publica():
+    resposta_limite = verificar_limite([
+        (chave_ip(request, "cotacao"), 5, 60),
+        (chave_ip(request, "cotacao-hora"), 30, 3600)
+    ])
+    if resposta_limite:
+        return resposta_limite
+
     dados = request.get_json()
 
     cliente = dados.get("cliente", "").strip()

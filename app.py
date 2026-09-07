@@ -1,5 +1,6 @@
 
 from flask import Flask
+from werkzeug.middleware.proxy_fix import ProxyFix
 from datetime import datetime
 import os
 import json
@@ -15,6 +16,7 @@ from config import (
     CORS_METHODS,
     CORS_RESOURCES,
     FLASK_DEBUG,
+    TRUSTED_PROXY_HOPS,
     JWT_ACCESS_TOKEN_EXPIRES,
     JWT_SECRET_KEY,
     MAX_CONTENT_LENGTH,
@@ -25,6 +27,7 @@ from config import (
     UPLOAD_MAX_FILE_SIZE
 )
 from extensions import cors, db, jwt
+from services.rate_limit import MENSAGEM_RATE_LIMIT
 from utils.senhas import gerar_hash_senha
 
 app = Flask(
@@ -40,6 +43,16 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 app.config["UPLOAD_MAX_FILE_SIZE"] = UPLOAD_MAX_FILE_SIZE
 app.config["SQLALCHEMY_DATABASE_URI"] = SQLALCHEMY_DATABASE_URI
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = SQLALCHEMY_TRACK_MODIFICATIONS
+
+if TRUSTED_PROXY_HOPS:
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=TRUSTED_PROXY_HOPS,
+        x_proto=TRUSTED_PROXY_HOPS,
+        x_host=TRUSTED_PROXY_HOPS,
+        x_port=TRUSTED_PROXY_HOPS,
+        x_prefix=TRUSTED_PROXY_HOPS
+    )
 
 try:
     os.makedirs(upload_folder, exist_ok=True)
@@ -63,6 +76,13 @@ def arquivo_muito_grande(_erro):
     return {
         "erro": "Arquivo excede o limite máximo permitido de 10 MB."
     }, 413
+
+
+@app.errorhandler(429)
+def muitas_tentativas(_erro):
+    return {
+        "erro": MENSAGEM_RATE_LIMIT
+    }, 429, {"Retry-After": "60"}
 
 from models.usuarios import UsuarioSistema
 from models.auditoria import LogAcao
