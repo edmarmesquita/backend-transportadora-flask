@@ -10,6 +10,7 @@ from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista, Veiculo
 from models.usuarios import UsuarioSistema
 from services.historicos import registrar_historico
+from services.auditoria import registrar_log, snapshot_objeto
 from services.recursos import (
     recalcular_disponibilidade_motorista,
     recalcular_status_veiculo,
@@ -235,6 +236,20 @@ def api_criar_carga():
     )
 
     db.session.add(primeiro_evento)
+    registrar_log(
+        acao="Criação de carga",
+        detalhes=f"Carga {nova_carga.codigo} criada.",
+        modulo="Cargas",
+        entidade="Rastreamento",
+        entidade_id=nova_carga.id,
+        depois=snapshot_objeto(nova_carga, [
+            "codigo", "cliente", "cliente_id", "status", "local_atual",
+            "destino", "valor_frete", "status_pagamento"
+        ]),
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
     db.session.commit()
 
     return {
@@ -267,6 +282,11 @@ def api_editar_carga(id):
         }), 403
 
     carga = Rastreamento.query.get_or_404(id)
+    antes = snapshot_objeto(carga, [
+        "codigo", "cliente", "cliente_id", "status", "local_atual",
+        "destino", "valor_frete", "status_pagamento", "motorista_id",
+        "veiculo_id"
+    ])
     dados = request.get_json() or {}
 
     cliente_id_recebido = dados.get("cliente_id")
@@ -340,6 +360,22 @@ def api_editar_carga(id):
 
         db.session.add(evento)
 
+    registrar_log(
+        acao="Edição de carga",
+        detalhes=f"Carga {carga.codigo} atualizada.",
+        modulo="Cargas",
+        entidade="Rastreamento",
+        entidade_id=carga.id,
+        antes=antes,
+        depois=snapshot_objeto(carga, [
+            "codigo", "cliente", "cliente_id", "status", "local_atual",
+            "destino", "valor_frete", "status_pagamento", "motorista_id",
+            "veiculo_id"
+        ]),
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
     db.session.commit()
 
     return {
@@ -412,8 +448,26 @@ def api_excluir_carga(id):
             )
         }), 409
 
+    antes = snapshot_objeto(carga, [
+        "codigo", "cliente", "cliente_id", "status", "local_atual",
+        "destino", "valor_frete", "status_pagamento", "motorista_id",
+        "veiculo_id"
+    ])
+
     try:
         db.session.delete(carga)
+        registrar_log(
+            acao="Exclusão de carga",
+            detalhes=f"Carga {antes['codigo']} excluída.",
+            modulo="Cargas",
+            entidade="Rastreamento",
+            entidade_id=id,
+            antes=antes,
+            depois=None,
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil
+        )
         db.session.commit()
 
         return jsonify({
@@ -526,6 +580,20 @@ def criar_viagem_para_carga(id):
     )
 
     db.session.add(historico_rastreamento)
+    registrar_log(
+        acao="Criação de viagem",
+        detalhes=f"Viagem {nova_viagem.id} criada para a carga {carga.codigo}.",
+        modulo="Viagens",
+        entidade="Viagem",
+        entidade_id=nova_viagem.id,
+        depois=snapshot_objeto(nova_viagem, [
+            "rastreamento_id", "motorista_id", "veiculo_id", "origem",
+            "destino", "status"
+        ]),
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
     db.session.commit()
 
     return {
@@ -661,8 +729,6 @@ def atribuir_motorista(id):
         }), 409
 
     try:
-        # Guarda o motorista anterior
-        # ANTES de fazer a troca.
         motorista_anterior_id = carga.motorista_id
 
         motorista_anterior = None
@@ -756,6 +822,18 @@ def atribuir_motorista(id):
                 excluir_carga_id=carga.id
             )
 
+        registrar_log(
+            acao="Atribuição de motorista",
+            detalhes=f"Motorista atribuído à carga {carga.codigo}.",
+            modulo="Cargas",
+            entidade="Rastreamento",
+            entidade_id=carga.id,
+            antes={"motorista_id": motorista_anterior_id},
+            depois={"motorista_id": motorista.id},
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil
+        )
         db.session.commit()
 
         return jsonify({
@@ -1024,6 +1102,18 @@ def atribuir_veiculo(id):
                 excluir_carga_id=carga.id
             )
 
+        registrar_log(
+            acao="Atribuição de veículo",
+            detalhes=f"Veículo atribuído à carga {carga.codigo}.",
+            modulo="Cargas",
+            entidade="Rastreamento",
+            entidade_id=carga.id,
+            antes={"veiculo_id": veiculo_anterior_id},
+            depois={"veiculo_id": veiculo.id},
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil
+        )
         db.session.commit()
 
         return jsonify({
@@ -1150,6 +1240,19 @@ def atualizar_status_carga(id):
     )
 
     db.session.add(historico_rastreamento)
+
+    registrar_log(
+        acao="Alteração de status de carga",
+        detalhes=f"Status de carga alterado para {novo_status}.",
+        modulo="Cargas",
+        entidade="Rastreamento",
+        entidade_id=carga.id,
+        antes={"status": status_anterior},
+        depois={"status": carga.status},
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
 
     db.session.commit()
 

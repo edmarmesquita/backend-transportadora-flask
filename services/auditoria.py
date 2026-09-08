@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 
 from extensions import db
 from models.auditoria import LogAcao
@@ -14,7 +15,8 @@ def registrar_log(
     depois=None,
     usuario_id=None,
     usuario_nome=None,
-    perfil=None
+    perfil=None,
+    commit=False
 ):
     log = LogAcao(
         usuario_id=usuario_id,
@@ -38,4 +40,33 @@ def registrar_log(
     )
 
     db.session.add(log)
-    db.session.commit()
+    if commit:
+        db.session.commit()
+
+    return log
+
+
+def snapshot_objeto(objeto, campos):
+    """Serializa somente campos explicitamente aprovados para auditoria."""
+    if objeto is None:
+        return None
+
+    return {
+        campo: deepcopy(getattr(objeto, campo, None))
+        for campo in campos
+    }
+
+
+def contexto_usuario(usuario):
+    if not usuario:
+        return {
+            "usuario_id": None,
+            "usuario_nome": None,
+            "perfil": None,
+        }
+
+    return {
+        "usuario_id": usuario.id,
+        "usuario_nome": usuario.nome,
+        "perfil": usuario.perfil,
+    }

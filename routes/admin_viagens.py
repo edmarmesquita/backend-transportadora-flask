@@ -15,6 +15,7 @@ from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista, Veiculo
 from models.usuarios import UsuarioSistema
 from services.historicos import registrar_historico
+from services.auditoria import registrar_log, snapshot_objeto
 from services.rate_limit import verificar_limite
 from services.recursos import (
     recalcular_disponibilidade_motorista,
@@ -126,6 +127,20 @@ def api_criar_viagem():
 )
 
     db.session.add(historico)
+    registrar_log(
+        acao="Criação de viagem",
+        detalhes=f"Viagem {nova_viagem.id} criada.",
+        modulo="Viagens",
+        entidade="Viagem",
+        entidade_id=nova_viagem.id,
+        depois=snapshot_objeto(nova_viagem, [
+            "rastreamento_id", "motorista_id", "veiculo_id", "origem",
+            "destino", "status"
+        ]),
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
     db.session.commit()
 
     return {"mensagem": "Viagem criada com sucesso!"}, 201
@@ -187,6 +202,7 @@ def api_atualizar_status_viagem(id):
 
     viagem = Viagem.query.get_or_404(id)
 
+    status_anterior = viagem.status
     status_atual = str(viagem.status).strip().lower()
 
     if status_atual == "cancelada":
@@ -304,6 +320,19 @@ def api_atualizar_status_viagem(id):
             )
 
             db.session.add(historico_rastreamento)
+
+        registrar_log(
+            acao="Alteração de status de viagem",
+            detalhes=f"Viagem {viagem.id} passou para {novo_status}.",
+            modulo="Viagens",
+            entidade="Viagem",
+            entidade_id=viagem.id,
+            antes={"status": status_anterior},
+            depois={"status": viagem.status},
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil
+        )
 
         db.session.commit()
 
@@ -438,6 +467,18 @@ def api_criar_ocorrencia(id):
 
     db.session.add(historico)
 
+    registrar_log(
+        acao="Criação de ocorrência administrativa",
+        detalhes=f"Ocorrência criada para a viagem {id}.",
+        modulo="Ocorrências",
+        entidade="OcorrenciaViagem",
+        entidade_id=id,
+        depois={"descricao": str(dados.get("descricao", "")).strip()},
+        usuario_id=usuario_id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
+
     db.session.commit()
 
     return {
@@ -556,6 +597,18 @@ def api_upload_arquivo_comprovante(id):
 
         db.session.add(registro)
         db.session.add(historico)
+        db.session.flush()
+        registrar_log(
+            acao="Upload de comprovante",
+            detalhes=f"Comprovante anexado à viagem {id}.",
+            modulo="Comprovantes",
+            entidade="ArquivoComprovanteViagem",
+            entidade_id=registro.id,
+            depois={"viagem_id": id, "arquivo_criado": True},
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil
+        )
         db.session.commit()
     except ErroValidacaoArquivo as erro:
         return {"erro": erro.mensagem}, erro.status_code
@@ -849,6 +902,25 @@ def api_finalizar_viagem(viagem_id):
             )
         )
 
+        db.session.flush()
+        registrar_log(
+            acao="Finalização de viagem",
+            detalhes=f"Entrega da viagem {viagem.id} finalizada.",
+            modulo="Viagens",
+            entidade="Viagem",
+            entidade_id=viagem.id,
+            antes={"status": status_atual, "comprovante": False},
+            depois={
+                "status": viagem.status,
+                "comprovante": True,
+                "comprovante_id": comprovante.id,
+                "recebedor": recebedor,
+            },
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil
+        )
+
 
 
         db.session.commit()
@@ -1093,6 +1165,23 @@ def api_despachar_viagem():
         )
 
         db.session.add(historico)
+        registrar_log(
+            acao="Despacho de viagem",
+            detalhes=f"Viagem {viagem.id} despachada.",
+            modulo="Viagens",
+            entidade="Viagem",
+            entidade_id=viagem.id,
+            antes={"status": "Planejada"},
+            depois={
+                "status": viagem.status,
+                "motorista_id": motorista.id,
+                "veiculo_id": veiculo.id,
+                "carga_id": carga.id,
+            },
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil
+        )
         db.session.commit()
 
         return jsonify({

@@ -9,6 +9,7 @@ from utils.constantes import (
 from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista
 from models.usuarios import UsuarioSistema
+from services.auditoria import registrar_log, snapshot_objeto
 from utils.senhas import gerar_hash_senha
 
 
@@ -158,6 +159,22 @@ def api_criar_motorista():
 
         db.session.add(motorista)
         db.session.add(usuario_sistema)
+        db.session.flush()
+        registrar_log(
+            acao="Criação de motorista",
+            detalhes=f"Motorista {motorista.nome} criado.",
+            modulo="Motoristas",
+            entidade="Motorista",
+            entidade_id=motorista.id,
+            depois=snapshot_objeto(motorista, [
+                "nome", "cpf", "cnh", "categoria_cnh", "validade_cnh",
+                "telefone", "email", "usuario", "status",
+                "disponibilidade", "observacoes"
+            ]),
+            usuario_id=usuario_autenticado.id,
+            usuario_nome=usuario_autenticado.nome,
+            perfil=usuario_autenticado.perfil
+        )
         db.session.commit()
 
         return {
@@ -207,7 +224,21 @@ def api_ativar_motorista(motorista_id):
             "erro": "Motorista não encontrado."
         }), 404
 
+    antes = {"status": motorista.status}
     motorista.status = "Ativo"
+
+    registrar_log(
+        acao="Ativação de motorista",
+        detalhes=f"Motorista {motorista.nome} ativado.",
+        modulo="Motoristas",
+        entidade="Motorista",
+        entidade_id=motorista.id,
+        antes=antes,
+        depois={"status": motorista.status},
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
 
     db.session.commit()
 
@@ -274,6 +305,13 @@ def api_inativar_motorista(motorista_id):
             )
         }), 409
 
+    antes = {
+        "status": motorista.status,
+        "usuario_ativo": (
+            motorista.usuario_sistema.ativo
+            if motorista.usuario_sistema else None
+        )
+    }
     motorista.status = "Inativo"
 
     if (
@@ -281,6 +319,25 @@ def api_inativar_motorista(motorista_id):
         and motorista.usuario_sistema is not None
     ):
         motorista.usuario_sistema.ativo = False
+
+    registrar_log(
+        acao="Inativação de motorista",
+        detalhes=f"Motorista {motorista.nome} inativado.",
+        modulo="Motoristas",
+        entidade="Motorista",
+        entidade_id=motorista.id,
+        antes=antes,
+        depois={
+            "status": motorista.status,
+            "usuario_ativo": (
+                motorista.usuario_sistema.ativo
+                if motorista.usuario_sistema else None
+            )
+        },
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
 
     db.session.commit()
 
@@ -352,6 +409,11 @@ def api_editar_motorista(id):
         }), 403
 
     motorista = Motorista.query.get_or_404(id)
+    antes = snapshot_objeto(motorista, [
+        "nome", "cpf", "cnh", "categoria_cnh", "validade_cnh",
+        "telefone", "email", "usuario", "status", "disponibilidade",
+        "observacoes"
+    ])
 
     dados = request.get_json(silent=True) or {}
 
@@ -414,6 +476,23 @@ def api_editar_motorista(id):
             and motorista.usuario_sistema is not None
         ):
             motorista.usuario_sistema.ativo = False
+
+    registrar_log(
+        acao="Edição de motorista",
+        detalhes=f"Motorista {motorista.nome} atualizado.",
+        modulo="Motoristas",
+        entidade="Motorista",
+        entidade_id=motorista.id,
+        antes=antes,
+        depois=snapshot_objeto(motorista, [
+            "nome", "cpf", "cnh", "categoria_cnh", "validade_cnh",
+            "telefone", "email", "usuario", "status", "disponibilidade",
+            "observacoes"
+        ]),
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
 
     db.session.commit()
 

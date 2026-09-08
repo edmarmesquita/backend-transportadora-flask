@@ -5,6 +5,7 @@ from extensions import db
 from models.clientes import Cliente
 from models.operacao import Rastreamento
 from models.usuarios import UsuarioSistema
+from services.auditoria import registrar_log, snapshot_objeto
 
 
 admin_clientes_bp = Blueprint(
@@ -97,6 +98,21 @@ def api_criar_cliente():
     )
 
     db.session.add(novo_cliente)
+    db.session.flush()
+    registrar_log(
+        acao="Criação de cliente",
+        detalhes=f"Cliente {novo_cliente.razao_social} criado.",
+        modulo="Clientes",
+        entidade="Cliente",
+        entidade_id=novo_cliente.id,
+        depois=snapshot_objeto(novo_cliente, [
+            "razao_social", "nome_fantasia", "documento", "responsavel",
+            "email", "telefone", "cidade", "estado", "ativo"
+        ]),
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
     db.session.commit()
 
     return {
@@ -168,9 +184,22 @@ def api_inativar_cliente(id):
         }), 403
 
     cliente = Cliente.query.get_or_404(id)
+    antes = {"ativo": cliente.ativo}
 
     cliente.ativo = False
 
+    registrar_log(
+        acao="Inativação de cliente",
+        detalhes=f"Cliente {cliente.razao_social} inativado.",
+        modulo="Clientes",
+        entidade="Cliente",
+        entidade_id=cliente.id,
+        antes=antes,
+        depois={"ativo": cliente.ativo},
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
     db.session.commit()
 
     return {"mensagem": "Cliente inativado com sucesso!"}
@@ -241,6 +270,10 @@ def api_editar_cliente(id):
         }), 403
 
     cliente = Cliente.query.get_or_404(id)
+    antes = snapshot_objeto(cliente, [
+        "razao_social", "nome_fantasia", "documento", "responsavel",
+        "email", "telefone", "cidade", "estado", "ativo"
+    ])
     dados = request.get_json()
 
     cliente.razao_social = dados.get("razao_social", cliente.razao_social)
@@ -255,6 +288,21 @@ def api_editar_cliente(id):
     if perfil_usuario == "administrador":
         cliente.ativo = dados.get("ativo", cliente.ativo)
 
+    registrar_log(
+        acao="Edição de cliente",
+        detalhes=f"Cliente {cliente.razao_social} atualizado.",
+        modulo="Clientes",
+        entidade="Cliente",
+        entidade_id=cliente.id,
+        antes=antes,
+        depois=snapshot_objeto(cliente, [
+            "razao_social", "nome_fantasia", "documento", "responsavel",
+            "email", "telefone", "cidade", "estado", "ativo"
+        ]),
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
     db.session.commit()
 
     return {"mensagem": "Cliente atualizado com sucesso!"}

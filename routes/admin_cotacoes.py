@@ -9,6 +9,7 @@ from models.cotacoes import Carga, Cotacao
 from models.operacao import Rastreamento
 from models.usuarios import UsuarioSistema
 from services.codigos_rastreamento import gerar_codigo_rastreamento
+from services.auditoria import registrar_log, snapshot_objeto
 
 
 admin_cotacoes_bp = Blueprint(
@@ -108,6 +109,28 @@ def aprovar_cotacao(id):
 
         db.session.add(rastreamento)
         db.session.flush()
+
+        registrar_log(
+            acao="Aprovação de cotação",
+            detalhes=(
+                f"Cotação {cotacao.id} aprovada e carga "
+                f"{carga.id} criada."
+            ),
+            modulo="Cotações",
+            entidade="Cotacao",
+            entidade_id=cotacao.id,
+            antes={"status": cotacao.status, "carga_criada": False},
+            depois={
+                "status": cotacao.status,
+                "carga_criada": True,
+                "carga_id": carga.id,
+                "rastreamento_id": rastreamento.id,
+                "cliente_id": cliente_selecionado.id,
+            },
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil
+        )
 
         db.session.commit()
 
@@ -220,6 +243,21 @@ def api_criar_cotacao_admin():
         )
 
         db.session.add(cotacao)
+        db.session.flush()
+        registrar_log(
+            acao="Criação de cotação administrativa",
+            detalhes=f"Cotação {cotacao.id} criada por {usuario.nome}.",
+            modulo="Cotações",
+            entidade="Cotacao",
+            entidade_id=cotacao.id,
+            depois=snapshot_objeto(cotacao, [
+                "cliente", "whatsapp", "origem", "destino", "tipo_carga",
+                "observacoes", "status"
+            ]),
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil
+        )
         db.session.commit()
 
         return jsonify({

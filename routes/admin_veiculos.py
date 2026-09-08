@@ -8,6 +8,7 @@ from services.recursos import (
 )
 from models.recursos import Veiculo
 from models.usuarios import UsuarioSistema
+from services.auditoria import registrar_log, snapshot_objeto
 
 
 admin_veiculos_bp = Blueprint(
@@ -113,6 +114,20 @@ def api_criar_veiculo():
     )
 
     db.session.add(veiculo)
+    db.session.flush()
+    registrar_log(
+        acao="Criação de veículo",
+        detalhes=f"Veículo {veiculo.placa} criado.",
+        modulo="Veículos",
+        entidade="Veiculo",
+        entidade_id=veiculo.id,
+        depois=snapshot_objeto(veiculo, [
+            "placa", "modelo", "marca", "tipo", "ano", "capacidade", "status"
+        ]),
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
     db.session.commit()
 
     return {"mensagem": "Veículo cadastrado com sucesso!"}, 201
@@ -151,7 +166,21 @@ def api_inativar_veiculo(id):
             )
         }), 409
 
+    antes = {"status": veiculo.status}
     veiculo.status = "Inativo"
+
+    registrar_log(
+        acao="Inativação de veículo",
+        detalhes=f"Veículo {veiculo.placa} inativado.",
+        modulo="Veículos",
+        entidade="Veiculo",
+        entidade_id=veiculo.id,
+        antes=antes,
+        depois={"status": veiculo.status},
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
 
     db.session.commit()
 
@@ -221,6 +250,9 @@ def api_editar_veiculo(id):
         }), 403
 
     veiculo = Veiculo.query.get_or_404(id)
+    antes = snapshot_objeto(veiculo, [
+        "placa", "modelo", "marca", "tipo", "ano", "capacidade", "status"
+    ])
     dados = request.get_json()
 
     status_atual = str(veiculo.status or "").strip()
@@ -262,6 +294,21 @@ def api_editar_veiculo(id):
     veiculo.ano = dados.get("ano", veiculo.ano)
     veiculo.capacidade = dados.get("capacidade", veiculo.capacidade)
     veiculo.status = novo_status
+
+    registrar_log(
+        acao="Edição de veículo",
+        detalhes=f"Veículo {veiculo.placa} atualizado.",
+        modulo="Veículos",
+        entidade="Veiculo",
+        entidade_id=veiculo.id,
+        antes=antes,
+        depois=snapshot_objeto(veiculo, [
+            "placa", "modelo", "marca", "tipo", "ano", "capacidade", "status"
+        ]),
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
 
     db.session.commit()
 

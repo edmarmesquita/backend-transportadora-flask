@@ -84,8 +84,6 @@ def api_inativar_usuario(id):
 
         usuario.ativo = False
 
-        db.session.commit()
-
         registrar_log(
             acao="Inativação de usuário",
             detalhes=(
@@ -103,6 +101,7 @@ def api_inativar_usuario(id):
             usuario_nome=usuario_logado.nome,
             perfil=usuario_logado.perfil
         )
+        db.session.commit()
 
         return jsonify({
             "mensagem": "Usuário inativado com sucesso!"
@@ -369,6 +368,25 @@ def api_admin_usuarios():
 
             db.session.add(motorista)
 
+        registrar_log(
+            acao="Criação de usuário",
+            detalhes=f"O usuário {usuario_logado.nome} criou {novo_usuario.nome}.",
+            modulo="Usuários",
+            entidade="UsuarioSistema",
+            entidade_id=novo_usuario.id,
+            antes=None,
+            depois={
+                "nome": novo_usuario.nome,
+                "usuario": novo_usuario.usuario,
+                "email": novo_usuario.email or "",
+                "perfil": novo_usuario.perfil,
+                "ativo": novo_usuario.ativo,
+                "senha_definida": True,
+            },
+            usuario_id=usuario_logado.id,
+            usuario_nome=usuario_logado.nome,
+            perfil=usuario_logado.perfil
+        )
         db.session.commit()
 
         return jsonify({
@@ -665,8 +683,6 @@ def api_editar_usuario(id):
             "senha_redefinida": redefinir_senha,
         }
 
-        db.session.commit()
-
         registrar_log(
             acao="Edição de usuário",
             detalhes=(
@@ -682,6 +698,7 @@ def api_editar_usuario(id):
             usuario_nome=usuario_logado.nome,
             perfil=usuario_logado.perfil
         )
+        db.session.commit()
 
         return jsonify({
             "mensagem": "Usuário atualizado com sucesso!"

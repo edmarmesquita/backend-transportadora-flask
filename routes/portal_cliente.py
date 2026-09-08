@@ -9,6 +9,7 @@ from models.ocorrencias import OcorrenciaEntrega
 from models.operacao import Rastreamento, Viagem
 from models.usuarios import UsuarioSistema
 from services.autorizacao_comprovantes import obter_cliente_usuario
+from services.auditoria import registrar_log
 from utils.datas import formatar_data_brasilia
 
 
@@ -316,6 +317,17 @@ def api_criar_ocorrencia_cliente(carga_id):
     )
 
     db.session.add(ocorrencia)
+    registrar_log(
+        acao="Criação de ocorrência pelo cliente",
+        detalhes=f"Cliente {usuario_sistema.nome} registrou ocorrência na carga {carga.id}.",
+        modulo="Ocorrências",
+        entidade="OcorrenciaEntrega",
+        entidade_id=carga.id,
+        depois={"titulo": titulo, "descricao": descricao},
+        usuario_id=usuario_sistema.id,
+        usuario_nome=usuario_sistema.nome,
+        perfil=usuario_sistema.perfil
+    )
     db.session.commit()
 
     return jsonify({

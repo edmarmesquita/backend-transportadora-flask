@@ -70,7 +70,8 @@ def api_login():
         f"Usuário {usuario.nome} acessou o painel React.",
         usuario_id=usuario.id,
         usuario_nome=usuario.nome,
-        perfil=usuario.perfil
+        perfil=usuario.perfil,
+        commit=True
     )
 
     return {
@@ -147,6 +148,18 @@ def api_alterar_senha(id):
     if motorista:
         motorista.senha = nova_senha_hash
 
+    registrar_log(
+        acao="Alteração da própria senha",
+        detalhes=f"Usuário {usuario.nome} alterou a própria senha.",
+        modulo="Autenticação",
+        entidade="UsuarioSistema",
+        entidade_id=usuario.id,
+        antes={"senha_alterada": False},
+        depois={"senha_alterada": True},
+        usuario_id=usuario.id,
+        usuario_nome=usuario.nome,
+        perfil=usuario.perfil
+    )
     db.session.commit()
 
     return {

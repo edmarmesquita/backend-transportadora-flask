@@ -15,6 +15,7 @@ from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista, Veiculo
 from models.usuarios import UsuarioSistema
 from services.historicos import registrar_historico
+from services.auditoria import registrar_log
 from services.rate_limit import verificar_limite
 from services.recursos import (
     recalcular_disponibilidade_motorista,
@@ -183,6 +184,18 @@ def api_atualizar_status_viagem_motorista(id):
 
             db.session.add(historico_rastreamento)
 
+        registrar_log(
+            acao="Alteração de status de viagem pelo motorista",
+            detalhes=f"Motorista {usuario_sistema.nome} alterou a viagem {viagem.id}.",
+            modulo="Viagens",
+            entidade="Viagem",
+            entidade_id=viagem.id,
+            antes={"status": status_atual},
+            depois={"status": viagem.status},
+            usuario_id=usuario_sistema.id,
+            usuario_nome=usuario_sistema.nome,
+            perfil=usuario_sistema.perfil
+        )
         db.session.commit()
 
         return jsonify({
@@ -461,6 +474,18 @@ def api_upload_arquivo_comprovante_motorista(id):
 
         db.session.add(registro)
         db.session.add(historico)
+        db.session.flush()
+        registrar_log(
+            acao="Upload de comprovante pelo motorista",
+            detalhes=f"Comprovante anexado à viagem {viagem.id}.",
+            modulo="Comprovantes",
+            entidade="ArquivoComprovanteViagem",
+            entidade_id=registro.id,
+            depois={"viagem_id": viagem.id, "arquivo_criado": True},
+            usuario_id=usuario_sistema.id,
+            usuario_nome=usuario_sistema.nome,
+            perfil=usuario_sistema.perfil
+        )
         db.session.commit()
 
         return jsonify({
@@ -967,6 +992,17 @@ def api_criar_ocorrencia_motorista(id):
 
         db.session.add(historico)
 
+        registrar_log(
+            acao="Criação de ocorrência pelo motorista",
+            detalhes=f"Ocorrência criada na viagem {viagem.id}.",
+            modulo="Ocorrências",
+            entidade="OcorrenciaViagem",
+            entidade_id=ocorrencia.id,
+            depois={"descricao": descricao},
+            usuario_id=usuario_sistema.id,
+            usuario_nome=usuario_sistema.nome,
+            perfil=usuario_sistema.perfil
+        )
         db.session.commit()
 
         return jsonify({
@@ -1253,6 +1289,25 @@ def api_finalizar_viagem_motorista(viagem_id):
         )
 
         # ... históricos ...
+
+        db.session.flush()
+        registrar_log(
+            acao="Finalização de viagem pelo motorista",
+            detalhes=f"Motorista {usuario.nome} finalizou a viagem {viagem.id}.",
+            modulo="Viagens",
+            entidade="Viagem",
+            entidade_id=viagem.id,
+            antes={"status": status_atual, "comprovante": False},
+            depois={
+                "status": viagem.status,
+                "comprovante": True,
+                "comprovante_id": comprovante.id,
+                "recebedor": recebedor,
+            },
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil
+        )
 
         print(
             "ANTES DO COMMIT:",
