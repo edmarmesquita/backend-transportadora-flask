@@ -1,6 +1,7 @@
 
-from flask import Flask
+from flask import Flask, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.exceptions import HTTPException
 from datetime import datetime
 import os
 import json
@@ -69,6 +70,49 @@ cors.init_app(
     allow_headers=CORS_ALLOW_HEADERS,
     methods=CORS_METHODS
 )
+
+
+MENSAGEM_JWT_INVALIDO = "Autenticação inválida."
+
+
+@jwt.unauthorized_loader
+def jwt_sem_token(_erro):
+    return jsonify({"erro": MENSAGEM_JWT_INVALIDO}), 401
+
+
+@jwt.invalid_token_loader
+def jwt_invalido(_erro):
+    return jsonify({"erro": MENSAGEM_JWT_INVALIDO}), 401
+
+
+@jwt.expired_token_loader
+def jwt_expirado(_cabecalho, _payload):
+    return jsonify({"erro": MENSAGEM_JWT_INVALIDO}), 401
+
+
+@jwt.revoked_token_loader
+def jwt_revogado(_cabecalho, _payload):
+    return jsonify({"erro": MENSAGEM_JWT_INVALIDO}), 401
+
+
+@jwt.needs_fresh_token_loader
+def jwt_fresco_necessario(_cabecalho, _payload):
+    return jsonify({"erro": MENSAGEM_JWT_INVALIDO}), 401
+
+
+@app.errorhandler(Exception)
+def erro_interno_api(erro):
+    if isinstance(erro, HTTPException):
+        return erro
+
+    if request.path.startswith("/api/"):
+        current_app_logger = app.logger
+        current_app_logger.exception("Erro interno em endpoint da API.")
+        return jsonify({
+            "erro": "Erro interno do servidor."
+        }), 500
+
+    raise erro
 
 
 @app.errorhandler(413)
