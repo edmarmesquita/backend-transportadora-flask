@@ -115,6 +115,14 @@ def erro_interno_api(erro):
     raise erro
 
 
+@app.errorhandler(404)
+def recurso_nao_encontrado(erro):
+    if request.path.startswith("/api/"):
+        return jsonify({"erro": "Recurso não encontrado."}), 404
+
+    return erro
+
+
 @app.errorhandler(413)
 def arquivo_muito_grande(_erro):
     return {

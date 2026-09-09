@@ -408,6 +408,21 @@ class PreStagingGateTest(unittest.TestCase):
         self.assertTrue(limited.is_json)
         self.assertGreaterEqual(int(limited.headers["Retry-After"]), 1)
 
+    def test_missing_api_route_is_generic_json(self):
+        response = self.client.get("/api/rota-inexistente")
+        self.assert_status(response, 404)
+        self.assertEqual(response.mimetype, "application/json")
+        self.assertEqual(response.get_json(), {
+            "erro": "Recurso não encontrado."
+        })
+
+    def test_missing_web_route_preserves_flask_response(self):
+        for path in ("/rota-inexistente", "/api", "/api-outra/rota-inexistente"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assert_status(response, 404)
+                self.assertEqual(response.mimetype, "text/html")
+
     def test_api_internal_error_is_json(self):
         def fail():
             raise RuntimeError("database path, secret and token must not leak")
