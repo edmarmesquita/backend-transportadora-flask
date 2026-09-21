@@ -544,6 +544,74 @@ class PreStagingGateTest(unittest.TestCase):
         self.assertTrue(limited.is_json)
         self.assertGreaterEqual(int(limited.headers["Retry-After"]), 1)
 
+        for _ in range(30):
+            self.assert_status(
+                self.client.get(
+                    "/api/rastreamento/GATE-RATE-LIMIT",
+                ),
+                404,
+            )
+        tracking_limited = self.client.get(
+            "/api/rastreamento/GATE-RATE-LIMIT",
+        )
+        self.assert_status(tracking_limited, 429)
+        self.assertTrue(tracking_limited.is_json)
+        self.assertGreaterEqual(
+            int(tracking_limited.headers["Retry-After"]),
+            1,
+        )
+
+        outro_ip = self.client.get(
+            "/api/rastreamento/GATE-RATE-LIMIT",
+            environ_base={"REMOTE_ADDR": "198.51.100.20"},
+        )
+        self.assert_status(outro_ip, 404)
+
+    def test_upload_rate_limit_por_identidade_jwt(self):
+        with self.app.app_context():
+            operador = self.UsuarioSistema(
+                nome="Operador Upload Gate",
+                usuario="operador-upload-gate",
+                email="operador-upload-gate@example.invalid",
+                senha="hash-operador-upload",
+                perfil="operador",
+                ativo=True,
+            )
+            self.db.session.add(operador)
+            self.db.session.commit()
+            token_operador = type(self).create_access_token(
+                identity=str(operador.id)
+            )
+
+        endpoint = (
+            "/api/admin/viagens/999999/comprovante/arquivo"
+        )
+
+        for _ in range(10):
+            self.assert_status(
+                self.client.post(
+                    endpoint,
+                    headers=self.auth(self.admin_token),
+                ),
+                404,
+            )
+
+        limitado = self.client.post(
+            endpoint,
+            headers=self.auth(self.admin_token),
+        )
+        self.assert_status(limitado, 429)
+        self.assertGreaterEqual(
+            int(limitado.headers["Retry-After"]),
+            1,
+        )
+
+        identidade_diferente = self.client.post(
+            endpoint,
+            headers=self.auth(token_operador),
+        )
+        self.assert_status(identidade_diferente, 404)
+
     def test_missing_api_route_is_generic_json(self):
         response = self.client.get("/api/rota-inexistente")
         self.assert_status(response, 404)

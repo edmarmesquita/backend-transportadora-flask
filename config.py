@@ -40,6 +40,24 @@ if not 1 <= APP_PORT <= 65535:
 
 FLASK_DEBUG = _obter_booleano_ambiente("FLASK_DEBUG", False)
 
+APP_ENV = os.environ.get(
+    "APP_ENV",
+    os.environ.get("RAILWAY_ENVIRONMENT_NAME", "development")
+).strip().lower()
+
+if APP_ENV not in {"development", "test", "staging", "production"}:
+    raise RuntimeError(
+        "APP_ENV deve ser development, test, staging ou production."
+    )
+
+REDIS_URL = os.environ.get("REDIS_URL", "").strip()
+REDIS_RATE_LIMIT_OBRIGATORIO = APP_ENV in {"staging", "production"}
+
+if REDIS_RATE_LIMIT_OBRIGATORIO and not REDIS_URL:
+    raise RuntimeError(
+        "REDIS_URL é obrigatória em staging e produção."
+    )
+
 _trusted_proxy_hops_ambiente = os.environ.get(
     "TRUSTED_PROXY_HOPS",
     "0"

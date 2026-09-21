@@ -21,6 +21,8 @@ from config import (
     JWT_ACCESS_TOKEN_EXPIRES,
     JWT_SECRET_KEY,
     MAX_CONTENT_LENGTH,
+    REDIS_RATE_LIMIT_OBRIGATORIO,
+    REDIS_URL,
     SQLALCHEMY_DATABASE_URI,
     SQLALCHEMY_TRACK_MODIFICATIONS,
     USAR_COMPATIBILIDADE_SCHEMA_SQLITE,
@@ -28,7 +30,7 @@ from config import (
     UPLOAD_MAX_FILE_SIZE
 )
 from extensions import cors, db, jwt
-from services.rate_limit import MENSAGEM_RATE_LIMIT
+from services.rate_limit import MENSAGEM_RATE_LIMIT, configurar_limiter
 from utils.senhas import gerar_hash_senha
 
 app = Flask(
@@ -44,6 +46,11 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 app.config["UPLOAD_MAX_FILE_SIZE"] = UPLOAD_MAX_FILE_SIZE
 app.config["SQLALCHEMY_DATABASE_URI"] = SQLALCHEMY_DATABASE_URI
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = SQLALCHEMY_TRACK_MODIFICATIONS
+
+configurar_limiter(
+    redis_url=REDIS_URL,
+    redis_obrigatorio=REDIS_RATE_LIMIT_OBRIGATORIO,
+)
 
 if TRUSTED_PROXY_HOPS:
     app.wsgi_app = ProxyFix(
