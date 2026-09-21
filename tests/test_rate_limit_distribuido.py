@@ -1,4 +1,3 @@
-import logging
 import os
 import subprocess
 import sys
@@ -13,11 +12,8 @@ from services.rate_limit import (
     RateLimiterMemoria,
     RateLimiterRedis,
     chave_ip,
-    configurar_limiter,
     criar_limiter,
-    logger,
 )
-from services import rate_limit as rate_limit_service
 
 
 class RelogioFalso:
@@ -48,41 +44,45 @@ class BackendRedisFalso:
         with self.lock:
             self._remover_expiradas()
 
-            antes = []
+            estados = []
             bloqueado = False
+            retry_after = None
 
             for indice, chave in enumerate(chaves):
                 limite = int(argumentos[indice * 2])
                 janela = int(argumentos[indice * 2 + 1])
                 atual = self.valores.get(chave, 0)
-                antes.append((chave, limite, janela, atual))
+                estados.append((chave, limite, janela, atual))
 
                 if atual >= limite:
                     bloqueado = True
 
-            resultado = [1 if bloqueado else 0]
-            for chave, limite, janela, atual in antes:
-                depois = atual
-                expiracao = self.expiracoes.get(
-                    chave,
-                    self.relogio.agora + janela,
-                )
-                ttl = max(1, int(expiracao - self.relogio.agora))
+            if not bloqueado:
+                for chave, _limite, janela, atual in estados:
+                    atual += 1
+                    self.valores[chave] = atual
 
-                if not bloqueado:
-                    depois = atual + 1
-                    self.valores[chave] = depois
-
-                    if depois == 1:
+                    if atual == 1:
                         self.expiracoes[chave] = (
                             self.relogio.agora + janela
                         )
 
-                    ttl = janela
+                return [0, 0]
 
-                resultado.extend((atual, depois, ttl))
+            for chave, limite, janela, atual in estados:
+                if atual < limite:
+                    continue
 
-        return resultado
+                expiracao = self.expiracoes.get(chave)
+                if expiracao is None:
+                    expiracao = self.relogio.agora + janela
+                    self.expiracoes[chave] = expiracao
+
+                ttl = max(1, int(expiracao - self.relogio.agora))
+                if retry_after is None:
+                    retry_after = ttl
+
+        return [1, retry_after or 1]
 
 
 class ClienteRedisFalso:
@@ -331,79 +331,6 @@ class RateLimiterDistribuidoTest(unittest.TestCase):
             ClienteRedisComFalha.MENSAGEM_SENSIVEL,
             str(erro_execucao.exception),
         )
-
-    def test_logger_info_e_habilitado_somente_em_staging(self):
-        nivel_original = logger.level
-        limiter_original = rate_limit_service.limiter
-
-        try:
-            logger.setLevel(logging.NOTSET)
-            configurar_limiter(
-                cliente_redis=self.cliente_a,
-                instrumentar=True,
-                ambiente="staging",
-            )
-
-            self.assertEqual(logger.level, logging.INFO)
-            self.assertTrue(logger.isEnabledFor(logging.INFO))
-
-            for ambiente in ("development", "test", "production"):
-                with self.subTest(ambiente=ambiente):
-                    logger.setLevel(logging.NOTSET)
-                    configurar_limiter(
-                        cliente_redis=self.cliente_a,
-                        instrumentar=True,
-                        ambiente=ambiente,
-                    )
-                    self.assertEqual(logger.level, logging.NOTSET)
-        finally:
-            logger.setLevel(nivel_original)
-            rate_limit_service.limiter = limiter_original
-
-    def test_instrumentacao_staging_e_sanitizada(self):
-        limiter = RateLimiterRedis(
-            self.cliente_a,
-            instrumentar=True,
-            ambiente="staging",
-        )
-        dados_sensiveis = (
-            "203.0.113.10",
-            "usuario-sintetico",
-            "senha-sintetica",
-            "jwt.sintetico.assinatura",
-            "redis://usuario:senha@redis.invalid:6379/0",
-        )
-        chave_logica = "login:ip:" + ":".join(dados_sensiveis)
-        regra = [(chave_logica, 5, 60)]
-
-        with self.assertLogs("services.rate_limit", level="INFO") as logs:
-            for _ in range(6):
-                limiter.verificar(regra)
-
-        texto = "\n".join(logs.output)
-        self.assertIn("backend=redis", texto)
-        self.assertIn("limite=login", texto)
-        self.assertIn("chave_hash=", texto)
-        self.assertIn("contador_antes=5 contador_depois=5", texto)
-        self.assertIn("ttl=60", texto)
-        self.assertIn("permitido=false", texto)
-        for dado_sensivel in dados_sensiveis:
-            self.assertNotIn(dado_sensivel, texto)
-        self.assertNotIn(chave_logica, texto)
-        self.assertNotIn("transportadora:rate-limit", texto)
-
-    def test_instrumentacao_nao_e_habilitada_fora_de_staging(self):
-        limiter = RateLimiterRedis(
-            self.cliente_a,
-            instrumentar=True,
-            ambiente="production",
-        )
-
-        with patch("services.rate_limit.logger.info") as registrar:
-            limiter.verificar([("login:ip:203.0.113.10", 5, 60)])
-
-        registrar.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

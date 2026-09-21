@@ -1,15 +1,10 @@
 from collections import defaultdict, deque
-import hashlib
 from ipaddress import ip_address
-import logging
 import os
 from threading import Lock
 from time import monotonic
 
 from flask import jsonify
-
-
-logger = logging.getLogger(__name__)
 
 MENSAGEM_RATE_LIMIT = (
     "Muitas tentativas. Aguarde antes de tentar novamente."
@@ -20,54 +15,64 @@ AMBIENTES_RAILWAY_CONFIAVEIS = {"staging", "production"}
 HEADER_IP_REAL_RAILWAY = "X-Real-IP"
 
 SCRIPT_RATE_LIMIT_ATOMICO = """
-local antes = {}
-local ttl_antes = {}
+local contadores = {}
+local ttls = {}
 local bloqueado = 0
+local primeira_regra_bloqueada = 0
 
 for indice, chave in ipairs(KEYS) do
     local posicao = (indice - 1) * 2
     local limite = tonumber(ARGV[posicao + 1])
-    local janela = tonumber(ARGV[posicao + 2])
     local atual = tonumber(redis.call('GET', chave) or '0')
     local ttl = redis.call('TTL', chave)
 
-    antes[indice] = atual
-    ttl_antes[indice] = ttl
+    contadores[indice] = atual
+    ttls[indice] = ttl
 
     if atual >= limite then
         bloqueado = 1
+        if primeira_regra_bloqueada == 0 then
+            primeira_regra_bloqueada = indice
+        end
     end
 end
 
-local resultado = {bloqueado}
+if bloqueado == 0 then
+    for indice, chave in ipairs(KEYS) do
+        local posicao = (indice - 1) * 2
+        local janela = tonumber(ARGV[posicao + 2])
+        local atual = redis.call('INCR', chave)
+
+        if atual == 1 then
+            redis.call('EXPIRE', chave, janela)
+        end
+    end
+
+    return {0, 0}
+end
+
+local retry_after = 1
 
 for indice, chave in ipairs(KEYS) do
     local posicao = (indice - 1) * 2
     local limite = tonumber(ARGV[posicao + 1])
     local janela = tonumber(ARGV[posicao + 2])
-    local atual = antes[indice]
-    local depois = atual
-    local ttl = ttl_antes[indice]
 
-    if bloqueado == 0 then
-        depois = redis.call('INCR', chave)
+    if contadores[indice] >= limite then
+        local ttl = ttls[indice]
 
-        if depois == 1 then
+        if ttl < 1 then
             redis.call('EXPIRE', chave, janela)
+            ttl = janela
         end
 
-        ttl = redis.call('TTL', chave)
-    elseif atual >= limite and ttl < 1 then
-        redis.call('EXPIRE', chave, janela)
-        ttl = janela
+        if indice == primeira_regra_bloqueada then
+            retry_after = ttl
+        end
     end
-
-    table.insert(resultado, atual)
-    table.insert(resultado, depois)
-    table.insert(resultado, ttl)
 end
 
-return resultado
+return {1, retry_after}
 """
 
 
@@ -92,55 +97,12 @@ def _validar_regras(regras):
     return regras_validadas
 
 
-def _nome_limite(chave):
-    prefixo = str(chave).split(":", 1)[0].strip().lower()
-    nomes = {
-        "rastreamento": "tracking",
-        "cotacao": "quotes",
-        "cotacao-hora": "quotes",
-    }
-    return nomes.get(prefixo, prefixo or "desconhecido")
-
-
-def _hash_chave(chave):
-    digest = hashlib.sha256(str(chave).encode("utf-8")).hexdigest()
-    return digest[:12]
-
-
-def _registrar_diagnostico(
-    habilitado,
-    backend,
-    chave,
-    contador_antes,
-    contador_depois,
-    ttl,
-    permitido,
-):
-    if not habilitado:
-        return
-
-    logger.info(
-        "rate_limit_diag backend=%s limite=%s chave_hash=%s "
-        "contador_antes=%d contador_depois=%d ttl=%d permitido=%s",
-        backend,
-        _nome_limite(chave),
-        _hash_chave(chave),
-        int(contador_antes),
-        int(contador_depois),
-        int(ttl),
-        str(bool(permitido)).lower(),
-    )
-
-
 class RateLimiterMemoria:
-    def __init__(self, instrumentar=False, ambiente="development"):
+    def __init__(self):
         self._janelas = defaultdict(deque)
         self._duracoes = {}
         self._operacoes_desde_limpeza = 0
         self._lock = Lock()
-        self._instrumentar = bool(
-            instrumentar and ambiente.strip().lower() == "staging"
-        )
 
     def verificar(self, regras):
         regras = _validar_regras(regras)
@@ -152,8 +114,8 @@ class RateLimiterMemoria:
                 self._limpar_expiradas_locked(agora)
                 self._operacoes_desde_limpeza = 0
 
-            situacoes = []
-            bloqueado = False
+            registros_por_chave = []
+            retry_after = None
 
             for chave, limite, janela in regras:
                 self._duracoes[chave] = janela
@@ -163,60 +125,20 @@ class RateLimiterMemoria:
                 while registros and registros[0] <= limite_inferior:
                     registros.popleft()
 
-                contador_antes = len(registros)
-                ttl = janela
-                if registros:
-                    ttl = max(
-                        1,
-                        int(registros[0] + janela - agora + 0.999)
-                    )
+                registros_por_chave.append(registros)
 
-                situacoes.append((
-                    chave,
-                    contador_antes,
-                    janela,
-                    ttl,
-                    limite,
-                ))
-
-                if contador_antes >= limite:
-                    if not bloqueado:
+                if len(registros) >= limite:
+                    if retry_after is None:
                         retry_after = max(
                             1,
                             int(registros[0] + janela - agora + 0.999)
                         )
-                    bloqueado = True
 
-            if bloqueado:
-                for chave, antes, _janela, ttl, _limite in situacoes:
-                    _registrar_diagnostico(
-                        self._instrumentar,
-                        "memory",
-                        chave,
-                        antes,
-                        antes,
-                        ttl,
-                        False,
-                    )
+            if retry_after is not None:
                 return retry_after
 
-            for chave, _antes, _janela, _ttl, _limite in situacoes:
-                self._janelas[chave].append(agora)
-
-            for chave, antes, janela, _ttl, _limite in situacoes:
-                ttl = max(
-                    1,
-                    int(self._janelas[chave][0] + janela - agora + 0.999)
-                )
-                _registrar_diagnostico(
-                    self._instrumentar,
-                    "memory",
-                    chave,
-                    antes,
-                    antes + 1,
-                    ttl,
-                    True,
-                )
+            for registros in registros_por_chave:
+                registros.append(agora)
 
         return None
 
@@ -253,14 +175,9 @@ class RateLimiterRedis:
         self,
         cliente,
         namespace=NAMESPACE_RATE_LIMIT,
-        instrumentar=False,
-        ambiente="development",
     ):
         self._cliente = cliente
         self._namespace = namespace.strip(":")
-        self._instrumentar = bool(
-            instrumentar and ambiente.strip().lower() == "staging"
-        )
 
     def verificar(self, regras):
         regras = _validar_regras(regras)
@@ -287,58 +204,27 @@ class RateLimiterRedis:
             if not isinstance(resultado, (list, tuple)):
                 raise ValueError("Resposta inesperada do script de rate limit.")
 
-            esperado = 1 + (3 * len(regras))
-            if len(resultado) != esperado:
-                raise ValueError("Metadados incompletos do rate limit.")
+            if len(resultado) != 2:
+                raise ValueError("Resposta incompleta do rate limit.")
 
             bloqueado = bool(int(resultado[0]))
-            metadados = []
-            for indice in range(len(regras)):
-                posicao = 1 + (indice * 3)
-                metadados.append((
-                    int(resultado[posicao]),
-                    int(resultado[posicao + 1]),
-                    int(resultado[posicao + 2]),
-                ))
+            retry_after = int(resultado[1])
         except Exception:
             # Não inclui REDIS_URL nem detalhes de conexão na exceção.
             raise RuntimeError(
                 "Backend compartilhado de rate limiting indisponível."
             ) from None
 
-        for (chave, _limite, _janela), (antes, depois, ttl) in zip(
-            regras,
-            metadados,
-        ):
-            _registrar_diagnostico(
-                self._instrumentar,
-                "redis",
-                chave,
-                antes,
-                depois,
-                ttl,
-                not bloqueado,
-            )
-
         if not bloqueado:
             return None
 
-        for (_chave, limite, _janela), (antes, _depois, ttl) in zip(
-            regras,
-            metadados,
-        ):
-            if antes >= limite:
-                return max(1, ttl)
-
-        return 1
+        return max(1, retry_after)
 
 
 def criar_limiter(
     redis_url="",
     redis_obrigatorio=False,
     cliente_redis=None,
-    instrumentar=False,
-    ambiente="development",
 ):
     redis_url = str(redis_url or "").strip()
 
@@ -360,21 +246,14 @@ def criar_limiter(
                 "Não foi possível conectar ao Redis de rate limiting."
             ) from None
 
-        return RateLimiterRedis(
-            cliente_redis,
-            instrumentar=instrumentar,
-            ambiente=ambiente,
-        )
+        return RateLimiterRedis(cliente_redis)
 
     if redis_obrigatorio:
         raise RuntimeError(
             "REDIS_URL é obrigatória em staging e produção."
         )
 
-    return RateLimiterMemoria(
-        instrumentar=instrumentar,
-        ambiente=ambiente,
-    )
+    return RateLimiterMemoria()
 
 
 limiter = RateLimiterMemoria()
@@ -384,8 +263,6 @@ def configurar_limiter(
     redis_url="",
     redis_obrigatorio=False,
     cliente_redis=None,
-    instrumentar=False,
-    ambiente="development",
 ):
     global limiter
 
@@ -393,15 +270,7 @@ def configurar_limiter(
         redis_url=redis_url,
         redis_obrigatorio=redis_obrigatorio,
         cliente_redis=cliente_redis,
-        instrumentar=instrumentar,
-        ambiente=ambiente,
     )
-
-    if (
-        instrumentar
-        and str(ambiente or "").strip().lower() == "staging"
-    ):
-        logger.setLevel(logging.INFO)
 
     return limiter
 
