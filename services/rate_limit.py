@@ -1,6 +1,8 @@
 from collections import defaultdict, deque
 import hashlib
+from ipaddress import ip_address
 import logging
+import os
 from threading import Lock
 from time import monotonic
 
@@ -14,6 +16,8 @@ MENSAGEM_RATE_LIMIT = (
 )
 
 NAMESPACE_RATE_LIMIT = "transportadora:rate-limit"
+AMBIENTES_RAILWAY_CONFIAVEIS = {"staging", "production"}
+HEADER_IP_REAL_RAILWAY = "X-Real-IP"
 
 SCRIPT_RATE_LIMIT_ATOMICO = """
 local antes = {}
@@ -417,5 +421,45 @@ def verificar_limite(regras):
     return resposta_rate_limit(retry_after)
 
 
+def _executando_em_ambiente_railway_confiavel():
+    ambiente_railway = os.environ.get(
+        "RAILWAY_ENVIRONMENT_NAME",
+        "",
+    ).strip()
+    ambiente_aplicacao = os.environ.get(
+        "APP_ENV",
+        ambiente_railway or "development",
+    ).strip().lower()
+
+    return bool(
+        ambiente_railway
+        and ambiente_aplicacao in AMBIENTES_RAILWAY_CONFIAVEIS
+    )
+
+
+def _ip_real_railway_validado(request):
+    if not _executando_em_ambiente_railway_confiavel():
+        return None
+
+    valor = request.headers.get(HEADER_IP_REAL_RAILWAY)
+    if (
+        not isinstance(valor, str)
+        or not valor
+        or valor != valor.strip()
+        or "%" in valor
+    ):
+        return None
+
+    try:
+        return str(ip_address(valor))
+    except ValueError:
+        return None
+
+
 def chave_ip(request, nome):
-    return f"{nome}:ip:{request.remote_addr or 'unknown'}"
+    endereco = (
+        _ip_real_railway_validado(request)
+        or request.remote_addr
+        or "unknown"
+    )
+    return f"{nome}:ip:{endereco}"

@@ -44,12 +44,21 @@ fechada, sem expor a URL de conexão.
 
 ## IP e proxy
 
-Esta mudança trata somente o armazenamento distribuído. A obtenção do IP não
-foi alterada.
+Em `staging` e `production` executados no Railway, os limites por IP preferem
+o header `X-Real-IP`, documentado pelo Railway como o identificador do IP
+remoto do cliente em requisições públicas. O header somente é aceito quando
+contém um único endereço IPv4 ou IPv6 validado pela biblioteca padrão
+`ipaddress`. Valores vazios, listas, portas, texto arbitrário, espaços extras e
+identificadores de escopo são rejeitados.
 
-Por padrão, `TRUSTED_PROXY_HOPS=0`: a chave usa `request.remote_addr` e ignora
-`X-Forwarded-For`. O número correto de proxies confiáveis deve ser validado
-separadamente com a topologia real do provedor antes de qualquer alteração.
+A confiança em `X-Real-IP` fica limitada a processos com `APP_ENV` igual a
+`staging` ou `production` e com `RAILWAY_ENVIRONMENT_NAME` presente. A premissa
+de segurança é que o tráfego público passou pelo edge proxy do Railway, que
+fornece esse header. Fora dessa fronteira, ou se o header estiver ausente ou
+inválido, a chave usa `request.remote_addr`.
+
+`X-Forwarded-For` continua ignorado. `TRUSTED_PROXY_HOPS=0` e a configuração
+do `ProxyFix` não são alterados por esta correção.
 
 ## Escala
 

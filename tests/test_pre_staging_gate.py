@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from datetime import timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -528,38 +529,51 @@ class PreStagingGateTest(unittest.TestCase):
             ),
             403,
         )
-        for _ in range(5):
-            self.assert_status(
-                self.client.post(
-                    "/api/login",
-                    json={"usuario": "admin-gate", "senha": "errada"},
-                ),
-                401,
+        ambiente_railway = {
+            "APP_ENV": "staging",
+            "RAILWAY_ENVIRONMENT_NAME": "staging",
+        }
+        headers_ip = {"X-Real-IP": "203.0.113.30"}
+        with patch.dict(os.environ, ambiente_railway):
+            for _ in range(5):
+                self.assert_status(
+                    self.client.post(
+                        "/api/login",
+                        json={"usuario": "admin-gate", "senha": "errada"},
+                        headers=headers_ip,
+                    ),
+                    401,
+                )
+            limited = self.client.post(
+                "/api/login",
+                json={"usuario": "admin-gate", "senha": "errada"},
+                headers=headers_ip,
             )
-        limited = self.client.post(
-            "/api/login",
-            json={"usuario": "admin-gate", "senha": "errada"},
-        )
-        self.assert_status(limited, 429)
-        self.assertTrue(limited.is_json)
-        self.assertGreaterEqual(int(limited.headers["Retry-After"]), 1)
+            self.assert_status(limited, 429)
+            self.assertTrue(limited.is_json)
+            self.assertGreaterEqual(
+                int(limited.headers["Retry-After"]),
+                1,
+            )
 
-        for _ in range(30):
-            self.assert_status(
-                self.client.get(
-                    "/api/rastreamento/GATE-RATE-LIMIT",
-                ),
-                404,
+            for _ in range(30):
+                self.assert_status(
+                    self.client.get(
+                        "/api/rastreamento/GATE-RATE-LIMIT",
+                        headers=headers_ip,
+                    ),
+                    404,
+                )
+            tracking_limited = self.client.get(
+                "/api/rastreamento/GATE-RATE-LIMIT",
+                headers=headers_ip,
             )
-        tracking_limited = self.client.get(
-            "/api/rastreamento/GATE-RATE-LIMIT",
-        )
-        self.assert_status(tracking_limited, 429)
-        self.assertTrue(tracking_limited.is_json)
-        self.assertGreaterEqual(
-            int(tracking_limited.headers["Retry-After"]),
-            1,
-        )
+            self.assert_status(tracking_limited, 429)
+            self.assertTrue(tracking_limited.is_json)
+            self.assertGreaterEqual(
+                int(tracking_limited.headers["Retry-After"]),
+                1,
+            )
 
         outro_ip = self.client.get(
             "/api/rastreamento/GATE-RATE-LIMIT",

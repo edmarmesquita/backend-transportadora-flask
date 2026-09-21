@@ -3,13 +3,16 @@ import os
 import subprocess
 import sys
 import unittest
-from threading import Lock
 from pathlib import Path
+from threading import Lock
 from unittest.mock import patch
+
+from flask import Flask, request
 
 from services.rate_limit import (
     RateLimiterMemoria,
     RateLimiterRedis,
+    chave_ip,
     configurar_limiter,
     criar_limiter,
     logger,
@@ -109,6 +112,113 @@ class RateLimiterDistribuidoTest(unittest.TestCase):
         self.backend = BackendRedisFalso(self.relogio)
         self.cliente_a = ClienteRedisFalso(self.backend)
         self.cliente_b = ClienteRedisFalso(self.backend)
+        self.app_requisicao = Flask(__name__)
+
+    def _chave_ip_requisicao(
+        self,
+        x_real_ip=None,
+        incluir_header=True,
+        remote_addr="192.0.2.10",
+        app_env="staging",
+        railway_env="staging",
+    ):
+        headers = {}
+        if incluir_header:
+            headers["X-Real-IP"] = x_real_ip
+
+        ambiente = {
+            "APP_ENV": app_env,
+            "RAILWAY_ENVIRONMENT_NAME": railway_env,
+        }
+        with patch.dict(os.environ, ambiente):
+            with self.app_requisicao.test_request_context(
+                "/",
+                headers=headers,
+                environ_base={"REMOTE_ADDR": remote_addr},
+            ):
+                return chave_ip(request, "login")
+
+    def test_x_real_ip_valido_gera_chave_estavel(self):
+        for ambiente in ("staging", "production"):
+            with self.subTest(ambiente=ambiente):
+                chave_a = self._chave_ip_requisicao(
+                    x_real_ip="203.0.113.10",
+                    remote_addr="10.0.0.1",
+                    app_env=ambiente,
+                    railway_env=ambiente,
+                )
+                chave_b = self._chave_ip_requisicao(
+                    x_real_ip="203.0.113.10",
+                    remote_addr="10.0.0.2",
+                    app_env=ambiente,
+                    railway_env=ambiente,
+                )
+
+                self.assertEqual(chave_a, chave_b)
+                self.assertEqual(chave_a, "login:ip:203.0.113.10")
+
+    def test_x_real_ips_diferentes_geram_chaves_diferentes(self):
+        chave_a = self._chave_ip_requisicao(
+            x_real_ip="203.0.113.10",
+        )
+        chave_b = self._chave_ip_requisicao(
+            x_real_ip="203.0.113.11",
+        )
+
+        self.assertNotEqual(chave_a, chave_b)
+
+    def test_x_real_ip_ausente_usa_remote_addr(self):
+        chave = self._chave_ip_requisicao(
+            incluir_header=False,
+            remote_addr="192.0.2.20",
+        )
+
+        self.assertEqual(chave, "login:ip:192.0.2.20")
+
+    def test_x_real_ip_invalido_usa_fallback_seguro(self):
+        valores_invalidos = (
+            "",
+            "203.0.113.10, 198.51.100.20",
+            " 203.0.113.10",
+            "203.0.113.10 ",
+            "203.0.113.10:443",
+            "203.0.113.10 extra",
+            "fe80::1%eth0",
+            "texto-arbitrario",
+        )
+
+        for valor in valores_invalidos:
+            with self.subTest(valor=valor):
+                chave = self._chave_ip_requisicao(
+                    x_real_ip=valor,
+                    remote_addr="192.0.2.30",
+                )
+                self.assertEqual(chave, "login:ip:192.0.2.30")
+
+    def test_x_real_ip_e_ignorado_fora_da_railway_comercial(self):
+        for app_env, railway_env in (
+            ("development", ""),
+            ("test", ""),
+            ("production", ""),
+        ):
+            with self.subTest(
+                app_env=app_env,
+                railway_env=railway_env,
+            ):
+                chave = self._chave_ip_requisicao(
+                    x_real_ip="203.0.113.10",
+                    remote_addr="192.0.2.40",
+                    app_env=app_env,
+                    railway_env=railway_env,
+                )
+                self.assertEqual(chave, "login:ip:192.0.2.40")
+
+    def test_x_real_ip_ipv6_e_normalizado(self):
+        chave = self._chave_ip_requisicao(
+            x_real_ip="2001:0db8:0000:0000:0000:0000:0000:0001",
+        )
+
+        self.assertEqual(chave, "login:ip:2001:db8::1")
 
     def test_duas_instancias_compartilham_contador(self):
         limiter_a = RateLimiterRedis(self.cliente_a)
