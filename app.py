@@ -21,6 +21,7 @@ from config import (
     JWT_ACCESS_TOKEN_EXPIRES,
     JWT_SECRET_KEY,
     MAX_CONTENT_LENGTH,
+    APP_ENV,
     REDIS_RATE_LIMIT_OBRIGATORIO,
     REDIS_URL,
     SQLALCHEMY_DATABASE_URI,
@@ -50,6 +51,8 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = SQLALCHEMY_TRACK_MODIFICATIONS
 configurar_limiter(
     redis_url=REDIS_URL,
     redis_obrigatorio=REDIS_RATE_LIMIT_OBRIGATORIO,
+    instrumentar=APP_ENV == "staging",
+    ambiente=APP_ENV,
 )
 
 if TRUSTED_PROXY_HOPS:

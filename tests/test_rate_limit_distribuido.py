@@ -4,6 +4,7 @@ import sys
 import unittest
 from threading import Lock
 from pathlib import Path
+from unittest.mock import patch
 
 from services.rate_limit import (
     RateLimiterMemoria,
@@ -40,29 +41,41 @@ class BackendRedisFalso:
         with self.lock:
             self._remover_expiradas()
 
+            antes = []
+            bloqueado = False
+
             for indice, chave in enumerate(chaves):
                 limite = int(argumentos[indice * 2])
                 janela = int(argumentos[indice * 2 + 1])
                 atual = self.valores.get(chave, 0)
+                antes.append((chave, limite, janela, atual))
 
                 if atual >= limite:
-                    expiracao = self.expiracoes.get(
-                        chave,
-                        self.relogio.agora + janela,
-                    )
-                    return max(1, int(expiracao - self.relogio.agora))
+                    bloqueado = True
 
-            for indice, chave in enumerate(chaves):
-                janela = int(argumentos[indice * 2 + 1])
-                atual = self.valores.get(chave, 0) + 1
-                self.valores[chave] = atual
+            resultado = [1 if bloqueado else 0]
+            for chave, limite, janela, atual in antes:
+                depois = atual
+                expiracao = self.expiracoes.get(
+                    chave,
+                    self.relogio.agora + janela,
+                )
+                ttl = max(1, int(expiracao - self.relogio.agora))
 
-                if atual == 1:
-                    self.expiracoes[chave] = (
-                        self.relogio.agora + janela
-                    )
+                if not bloqueado:
+                    depois = atual + 1
+                    self.valores[chave] = depois
 
-        return 0
+                    if depois == 1:
+                        self.expiracoes[chave] = (
+                            self.relogio.agora + janela
+                        )
+
+                    ttl = janela
+
+                resultado.extend((atual, depois, ttl))
+
+        return resultado
 
 
 class ClienteRedisFalso:
@@ -204,6 +217,40 @@ class RateLimiterDistribuidoTest(unittest.TestCase):
             ClienteRedisComFalha.MENSAGEM_SENSIVEL,
             str(erro_execucao.exception),
         )
+
+    def test_instrumentacao_staging_e_sanitizada(self):
+        limiter = RateLimiterRedis(
+            self.cliente_a,
+            instrumentar=True,
+            ambiente="staging",
+        )
+        regra = [("login:ip:203.0.113.10", 5, 60)]
+
+        with self.assertLogs("services.rate_limit", level="INFO") as logs:
+            for _ in range(6):
+                limiter.verificar(regra)
+
+        texto = "\n".join(logs.output)
+        self.assertIn("backend=redis", texto)
+        self.assertIn("limite=login", texto)
+        self.assertIn("chave_hash=", texto)
+        self.assertIn("contador_antes=5 contador_depois=5", texto)
+        self.assertIn("ttl=60", texto)
+        self.assertIn("permitido=false", texto)
+        self.assertNotIn("203.0.113.10", texto)
+        self.assertNotIn("transportadora:rate-limit", texto)
+
+    def test_instrumentacao_nao_e_habilitada_fora_de_staging(self):
+        limiter = RateLimiterRedis(
+            self.cliente_a,
+            instrumentar=True,
+            ambiente="production",
+        )
+
+        with patch("services.rate_limit.logger.info") as registrar:
+            limiter.verificar([("login:ip:203.0.113.10", 5, 60)])
+
+        registrar.assert_not_called()
 
 
 if __name__ == "__main__":
