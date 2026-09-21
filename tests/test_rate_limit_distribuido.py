@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import sys
@@ -9,8 +10,11 @@ from unittest.mock import patch
 from services.rate_limit import (
     RateLimiterMemoria,
     RateLimiterRedis,
+    configurar_limiter,
     criar_limiter,
+    logger,
 )
+from services import rate_limit as rate_limit_service
 
 
 class RelogioFalso:
@@ -218,13 +222,49 @@ class RateLimiterDistribuidoTest(unittest.TestCase):
             str(erro_execucao.exception),
         )
 
+    def test_logger_info_e_habilitado_somente_em_staging(self):
+        nivel_original = logger.level
+        limiter_original = rate_limit_service.limiter
+
+        try:
+            logger.setLevel(logging.NOTSET)
+            configurar_limiter(
+                cliente_redis=self.cliente_a,
+                instrumentar=True,
+                ambiente="staging",
+            )
+
+            self.assertEqual(logger.level, logging.INFO)
+            self.assertTrue(logger.isEnabledFor(logging.INFO))
+
+            for ambiente in ("development", "test", "production"):
+                with self.subTest(ambiente=ambiente):
+                    logger.setLevel(logging.NOTSET)
+                    configurar_limiter(
+                        cliente_redis=self.cliente_a,
+                        instrumentar=True,
+                        ambiente=ambiente,
+                    )
+                    self.assertEqual(logger.level, logging.NOTSET)
+        finally:
+            logger.setLevel(nivel_original)
+            rate_limit_service.limiter = limiter_original
+
     def test_instrumentacao_staging_e_sanitizada(self):
         limiter = RateLimiterRedis(
             self.cliente_a,
             instrumentar=True,
             ambiente="staging",
         )
-        regra = [("login:ip:203.0.113.10", 5, 60)]
+        dados_sensiveis = (
+            "203.0.113.10",
+            "usuario-sintetico",
+            "senha-sintetica",
+            "jwt.sintetico.assinatura",
+            "redis://usuario:senha@redis.invalid:6379/0",
+        )
+        chave_logica = "login:ip:" + ":".join(dados_sensiveis)
+        regra = [(chave_logica, 5, 60)]
 
         with self.assertLogs("services.rate_limit", level="INFO") as logs:
             for _ in range(6):
@@ -237,7 +277,9 @@ class RateLimiterDistribuidoTest(unittest.TestCase):
         self.assertIn("contador_antes=5 contador_depois=5", texto)
         self.assertIn("ttl=60", texto)
         self.assertIn("permitido=false", texto)
-        self.assertNotIn("203.0.113.10", texto)
+        for dado_sensivel in dados_sensiveis:
+            self.assertNotIn(dado_sensivel, texto)
+        self.assertNotIn(chave_logica, texto)
         self.assertNotIn("transportadora:rate-limit", texto)
 
     def test_instrumentacao_nao_e_habilitada_fora_de_staging(self):

@@ -392,6 +392,13 @@ def configurar_limiter(
         instrumentar=instrumentar,
         ambiente=ambiente,
     )
+
+    if (
+        instrumentar
+        and str(ambiente or "").strip().lower() == "staging"
+    ):
+        logger.setLevel(logging.INFO)
+
     return limiter
 
 
