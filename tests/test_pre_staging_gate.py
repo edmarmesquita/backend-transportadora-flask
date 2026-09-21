@@ -39,6 +39,7 @@ class PreStagingGateTest(unittest.TestCase):
         from models.auditoria import LogAcao
         from models.clientes import Cliente, ClienteUsuario
         from models.comprovantes import ArquivoComprovanteViagem
+        from models.historicos import HistoricoRastreamento
         from models.operacao import Rastreamento, Viagem
         from models.recursos import Motorista, Veiculo
         from models.usuarios import UsuarioSistema
@@ -51,6 +52,7 @@ class PreStagingGateTest(unittest.TestCase):
         cls.Cliente = Cliente
         cls.ClienteUsuario = ClienteUsuario
         cls.ArquivoComprovanteViagem = ArquivoComprovanteViagem
+        cls.HistoricoRastreamento = HistoricoRastreamento
         cls.Rastreamento = Rastreamento
         cls.Viagem = Viagem
         cls.Motorista = Motorista
@@ -340,6 +342,140 @@ class PreStagingGateTest(unittest.TestCase):
             headers=self.auth(token_a),
         )
         self.assertIn(response.status_code, (401, 403))
+
+    def test_exclusao_canonica_de_cargas(self):
+        observacao_criacao = "Carga cadastrada no sistema."
+
+        def criar_carga_via_api(status):
+            response = self.client.post(
+                "/api/admin/cargas",
+                json={
+                    "cliente": "Cliente Exclusao Canonica",
+                    "status": status,
+                    "local_atual": "Origem",
+                    "destino": "Destino",
+                    "valor_frete": "10",
+                    "status_pagamento": "Pendente",
+                },
+                headers=self.auth(),
+            )
+            self.assert_status(response, 201)
+            return response.get_json()["id"]
+
+        def criar_carga_direta(codigo, status):
+            with self.app.app_context():
+                carga = self.Rastreamento(
+                    codigo=codigo,
+                    cliente="Cliente Exclusao Canonica",
+                    status=status,
+                    local_atual="Origem",
+                    destino="Destino",
+                )
+                self.db.session.add(carga)
+                self.db.session.flush()
+                self.db.session.add(self.HistoricoRastreamento(
+                    rastreamento_id=carga.id,
+                    status=status,
+                    local=carga.local_atual,
+                    observacao=observacao_criacao,
+                ))
+                self.db.session.commit()
+                return carga.id
+
+        def confirmar_evento_inicial(carga_id):
+            with self.app.app_context():
+                eventos = self.HistoricoRastreamento.query.filter_by(
+                    rastreamento_id=carga_id
+                ).all()
+                self.assertEqual(len(eventos), 1)
+                self.assertEqual(eventos[0].observacao, observacao_criacao)
+
+        def excluir_e_confirmar_sem_orfaos(carga_id):
+            self.assert_status(
+                self.client.delete(
+                    f"/api/admin/cargas/{carga_id}",
+                    headers=self.auth(),
+                ),
+                200,
+            )
+            with self.app.app_context():
+                self.assertIsNone(
+                    self.db.session.get(self.Rastreamento, carga_id)
+                )
+                self.assertEqual(
+                    self.HistoricoRastreamento.query.filter_by(
+                        rastreamento_id=carga_id
+                    ).count(),
+                    0,
+                )
+
+        pendente_id = criar_carga_via_api("Pendente")
+        confirmar_evento_inicial(pendente_id)
+        excluir_e_confirmar_sem_orfaos(pendente_id)
+
+        programada_id = criar_carga_via_api("Programada")
+        confirmar_evento_inicial(programada_id)
+        excluir_e_confirmar_sem_orfaos(programada_id)
+
+        preparacao_id = criar_carga_direta(
+            "EXCLUSAO-PREPARACAO",
+            "Em preparação",
+        )
+        confirmar_evento_inicial(preparacao_id)
+        excluir_e_confirmar_sem_orfaos(preparacao_id)
+
+        com_viagem_id = criar_carga_direta(
+            "EXCLUSAO-COM-VIAGEM",
+            "Pendente",
+        )
+        with self.app.app_context():
+            self.db.session.add(self.Viagem(
+                rastreamento_id=com_viagem_id,
+                origem="Origem",
+                destino="Destino",
+                status="Planejada",
+            ))
+            self.db.session.commit()
+        self.assert_status(
+            self.client.delete(
+                f"/api/admin/cargas/{com_viagem_id}",
+                headers=self.auth(),
+            ),
+            409,
+        )
+
+        com_historico_id = criar_carga_direta(
+            "EXCLUSAO-COM-HISTORICO",
+            "Pendente",
+        )
+        with self.app.app_context():
+            self.db.session.add(self.HistoricoRastreamento(
+                rastreamento_id=com_historico_id,
+                status="Pendente",
+                local="Outro local",
+                observacao="Movimentação operacional.",
+            ))
+            self.db.session.commit()
+        self.assert_status(
+            self.client.delete(
+                f"/api/admin/cargas/{com_historico_id}",
+                headers=self.auth(),
+            ),
+            409,
+        )
+
+        for codigo, status in (
+            ("EXCLUSAO-EM-TRANSITO", "Em trânsito"),
+            ("EXCLUSAO-ENTREGUE", "Entregue"),
+        ):
+            carga_id = criar_carga_direta(codigo, status)
+            self.assert_status(
+                self.client.delete(
+                    f"/api/admin/cargas/{carga_id}",
+                    headers=self.auth(),
+                ),
+                409,
+            )
 
     def test_jwt_errors_and_rate_limits(self):
         self.assert_status(self.client.get("/api/admin/clientes", headers={}), 401)

@@ -33,6 +33,11 @@ admin_cargas_bp = Blueprint(
 )
 
 
+OBSERVACAO_EVENTO_TECNICO_CRIACAO_CARGA = (
+    "Carga cadastrada no sistema."
+)
+
+
 @admin_cargas_bp.route("/api/admin/cargas", methods=["GET"])
 @jwt_required()
 def api_admin_cargas():
@@ -232,7 +237,7 @@ def api_criar_carga():
     rastreamento_id=nova_carga.id,
     status=nova_carga.status or "Carga criada",
     local=nova_carga.local_atual or "Origem não informada",
-    observacao="Carga cadastrada no sistema."
+    observacao=OBSERVACAO_EVENTO_TECNICO_CRIACAO_CARGA
     )
 
     db.session.add(primeiro_evento)
@@ -436,11 +441,25 @@ def api_excluir_carga(id):
             )
         }), 409
 
-    historico = HistoricoRastreamento.query.filter_by(
+    historicos = HistoricoRastreamento.query.filter_by(
         rastreamento_id=carga.id
-    ).first()
+    ).order_by(
+        HistoricoRastreamento.id.asc()
+    ).all()
 
-    if historico:
+    # HistoricoRastreamento ainda não possui um tipo estrutural de evento.
+    # Por isso, o marcador exato da criação só é considerado técnico
+    # quando é o único evento da carga. Qualquer evento adicional torna o
+    # conjunto operacional e impede a exclusão.
+    evento_tecnico_inicial = None
+    if (
+        len(historicos) == 1
+        and historicos[0].observacao
+        == OBSERVACAO_EVENTO_TECNICO_CRIACAO_CARGA
+    ):
+        evento_tecnico_inicial = historicos[0]
+
+    if historicos and not evento_tecnico_inicial:
         return jsonify({
             "erro": (
                 "Não é possível excluir esta carga "
@@ -455,6 +474,9 @@ def api_excluir_carga(id):
     ])
 
     try:
+        if evento_tecnico_inicial:
+            db.session.delete(evento_tecnico_inicial)
+
         db.session.delete(carga)
         registrar_log(
             acao="Exclusão de carga",
