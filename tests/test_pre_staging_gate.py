@@ -94,6 +94,71 @@ class PreStagingGateTest(unittest.TestCase):
             response.get_json(silent=True),
         )
 
+    def test_health_saudavel_e_publico(self):
+        response = self.client.get("/health")
+
+        self.assert_status(response, 200)
+        self.assertEqual(response.get_json(), {
+            "status": "ok",
+            "service": "transportadora-backend",
+        })
+
+    def test_health_nao_expoe_informacoes_sensiveis(self):
+        response = self.client.get("/health")
+        corpo = response.get_data(as_text=True).lower()
+
+        self.assert_status(response, 200)
+        for termo_sensivel in (
+            "database_url",
+            "redis_url",
+            "jwt",
+            "secret",
+            "traceback",
+            "sqlite://",
+            str(BACKEND_DIR).lower(),
+        ):
+            with self.subTest(termo=termo_sensivel):
+                self.assertNotIn(termo_sensivel, corpo)
+
+    def test_health_aplica_headers_de_seguranca(self):
+        response = self.client.get("/health")
+
+        self.assert_status(response, 200)
+        self.assertEqual(
+            response.headers.get("X-Content-Type-Options"),
+            "nosniff",
+        )
+        self.assertEqual(response.headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(
+            response.headers.get("Referrer-Policy"),
+            "no-referrer",
+        )
+        self.assertEqual(
+            response.headers.get("Permissions-Policy"),
+            "camera=(), microphone=(), geolocation=()",
+        )
+
+    def test_health_degradado_quando_banco_indisponivel(self):
+        import app as app_module
+        from sqlalchemy.exc import SQLAlchemyError
+
+        detalhe_interno = "database.internal:5432 senha=nao-expor"
+        with patch.object(
+            app_module,
+            "verificar_conexao_banco",
+            side_effect=SQLAlchemyError(detalhe_interno),
+        ), patch.object(app_module.app.logger, "exception"):
+            response = self.client.get("/health")
+
+        self.assert_status(response, 503)
+        self.assertEqual(response.get_json(), {
+            "status": "degraded",
+            "service": "transportadora-backend",
+        })
+        corpo = response.get_data(as_text=True)
+        self.assertNotIn(detalhe_interno, corpo)
+        self.assertNotIn("traceback", corpo.lower())
+
     def test_bootstrap_and_repeated_initialization_are_safe(self):
         self.assertEqual(self.admin.perfil, "administrador")
         self.assertTrue(self.admin.ativo)

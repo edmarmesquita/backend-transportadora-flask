@@ -1,5 +1,7 @@
 
 from flask import Flask, jsonify, request
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import HTTPException
 from datetime import datetime
@@ -95,6 +97,33 @@ def adicionar_headers_seguranca(response):
         )
 
     return response
+
+
+def verificar_conexao_banco():
+    with db.engine.connect() as conexao:
+        return conexao.execute(text("SELECT 1")).scalar_one() == 1
+
+
+@app.get("/health")
+def health():
+    try:
+        banco_disponivel = verificar_conexao_banco()
+    except SQLAlchemyError:
+        app.logger.exception(
+            "Health check detectou indisponibilidade do banco."
+        )
+        banco_disponivel = False
+
+    if not banco_disponivel:
+        return jsonify({
+            "status": "degraded",
+            "service": "transportadora-backend",
+        }), 503
+
+    return jsonify({
+        "status": "ok",
+        "service": "transportadora-backend",
+    }), 200
 
 
 MENSAGEM_JWT_INVALIDO = "Autenticação inválida."
