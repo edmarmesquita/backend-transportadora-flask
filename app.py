@@ -17,6 +17,7 @@ from config import (
     CORS_METHODS,
     CORS_RESOURCES,
     FLASK_DEBUG,
+    APP_ENV,
     TRUSTED_PROXY_HOPS,
     JWT_ACCESS_TOKEN_EXPIRES,
     JWT_SECRET_KEY,
@@ -77,6 +78,23 @@ cors.init_app(
     allow_headers=CORS_ALLOW_HEADERS,
     methods=CORS_METHODS
 )
+
+
+@app.after_request
+def adicionar_headers_seguranca(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=()"
+    )
+
+    if APP_ENV in {"staging", "production"}:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000"
+        )
+
+    return response
 
 
 MENSAGEM_JWT_INVALIDO = "Autenticação inválida."

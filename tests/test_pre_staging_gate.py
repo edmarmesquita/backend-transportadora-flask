@@ -737,6 +737,59 @@ class PreStagingGateTest(unittest.TestCase):
         )
         self.assertIsNone(unknown.headers.get("Access-Control-Allow-Origin"))
 
+    def test_security_headers_by_environment_preserve_cors(self):
+        import app as app_module
+
+        for ambiente in ("staging", "production"):
+            with patch.object(app_module, "APP_ENV", ambiente):
+                response = self.client.get("/")
+
+            self.assertEqual(
+                response.headers.get("X-Content-Type-Options"),
+                "nosniff",
+            )
+            self.assertEqual(
+                response.headers.get("X-Frame-Options"),
+                "DENY",
+            )
+            self.assertEqual(
+                response.headers.get("Referrer-Policy"),
+                "no-referrer",
+            )
+            self.assertEqual(
+                response.headers.get("Permissions-Policy"),
+                "camera=(), microphone=(), geolocation=()",
+            )
+            self.assertEqual(
+                response.headers.get("Strict-Transport-Security"),
+                "max-age=31536000",
+            )
+
+        for ambiente in ("development", "test"):
+            with patch.object(app_module, "APP_ENV", ambiente):
+                response = self.client.get("/")
+
+            self.assertEqual(
+                response.headers.get("X-Content-Type-Options"),
+                "nosniff",
+            )
+            self.assertIsNone(
+                response.headers.get("Strict-Transport-Security")
+            )
+
+        preflight = self.client.options(
+            "/api/admin/clientes",
+            headers={
+                "Origin": "https://staging.example.invalid",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Authorization, Content-Type",
+            },
+        )
+        self.assertEqual(
+            preflight.headers.get("Access-Control-Allow-Origin"),
+            "https://staging.example.invalid",
+        )
+
     def test_sqlite_integrity_and_restart_persistence(self):
         with sqlite3.connect(self.db_path) as connection:
             self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
