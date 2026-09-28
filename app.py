@@ -191,6 +191,7 @@ def muitas_tentativas(_erro):
     }, 429, {"Retry-After": "60"}
 
 from models.usuarios import UsuarioSistema
+from models.configuracao_transportadora import ConfiguracaoTransportadora
 from models.auditoria import LogAcao
 from models.recursos import Motorista, Veiculo
 from models.rotas import Rota
@@ -241,6 +242,7 @@ from routes.portal_motorista import portal_motorista_bp
 from routes.admin_cargas import admin_cargas_bp
 from routes.admin_viagens import admin_viagens_bp
 from routes.comprovantes import comprovantes_bp
+from routes.configuracao_transportadora import configuracao_transportadora_bp
 
 app.register_blueprint(public_bp)
 app.register_blueprint(auth_bp)
@@ -256,6 +258,7 @@ app.register_blueprint(portal_motorista_bp)
 app.register_blueprint(admin_cargas_bp)
 app.register_blueprint(admin_viagens_bp)
 app.register_blueprint(comprovantes_bp)
+app.register_blueprint(configuracao_transportadora_bp)
 
 with app.app_context():
     db.create_all()

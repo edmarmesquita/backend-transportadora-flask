@@ -7,6 +7,7 @@ from reportlab.pdfgen import canvas
 
 from extensions import db
 from models.clientes import Cliente
+from models.configuracao_transportadora import ConfiguracaoTransportadora
 from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista, Veiculo
 from models.usuarios import UsuarioSistema
@@ -16,6 +17,13 @@ admin_relatorios_bp = Blueprint(
     "admin_relatorios",
     __name__
 )
+
+
+def nome_transportadora_relatorio():
+    configuracao = db.session.get(ConfiguracaoTransportadora, 1)
+    if configuracao and configuracao.nome_exibicao:
+        return configuracao.nome_exibicao
+    return "TRANSPORTADORA"
 
 
 @admin_relatorios_bp.route("/api/admin/relatorios/viagens")
@@ -76,7 +84,7 @@ def api_relatorio_viagens_pdf():
     pdf.drawString(
         50,
         800,
-        "TRANSPORTADORA RAMOS"
+        nome_transportadora_relatorio()
     )
 
     pdf.setFont("Helvetica", 12)
@@ -191,7 +199,7 @@ def api_relatorio_financeiro_pdf():
     pdf.drawString(
         50,
         800,
-        "TRANSPORTADORA RAMOS"
+        nome_transportadora_relatorio()
     )
 
     pdf.setFont(

@@ -103,6 +103,129 @@ class PreStagingGateTest(unittest.TestCase):
             "service": "transportadora-backend",
         })
 
+    def test_raiz_publica_identifica_rotanza(self):
+        response = self.client.get("/")
+
+        self.assert_status(response, 200)
+        self.assertEqual(response.get_json(), {
+            "mensagem": "Backend Rotanza ativo.",
+            "status": "online",
+        })
+
+    def test_configuracao_transportadora_autorizacao_validacao_e_pdf(self):
+        from sqlalchemy.exc import IntegrityError
+        from flask_jwt_extended import create_access_token
+        from models.configuracao_transportadora import ConfiguracaoTransportadora
+        from routes.admin_relatorios import nome_transportadora_relatorio
+
+        rota = "/api/configuracao/transportadora"
+        self.assert_status(self.client.get(rota), 401)
+        with self.app.app_context():
+            self.db.session.query(ConfiguracaoTransportadora).delete()
+            self.db.session.commit()
+            self.assertEqual(nome_transportadora_relatorio(), "TRANSPORTADORA")
+
+        vazio = self.client.get(rota, headers=self.auth())
+        self.assert_status(vazio, 200)
+        self.assertIsNone(vazio.get_json()["nome_exibicao"])
+        self.assert_status(
+            self.client.put(rota, headers=self.auth(), json={"nome_exibicao": ""}),
+            400,
+        )
+        self.assert_status(
+            self.client.put(rota, headers=self.auth(), json={
+                "nome_exibicao": "Transportadora Gate",
+                "razao_social": "Gate Logística Ltda",
+                "campo_inesperado": "valor",
+            }), 400,
+        )
+        for campo, valor in (
+            ("telefone", "---"), ("telefone", "123"),
+            ("whatsapp", "( )"), ("whatsapp", "123"),
+        ):
+            self.assert_status(
+                self.client.put(rota, headers=self.auth(), json={
+                    "nome_exibicao": "Transportadora Gate",
+                    "razao_social": "Gate Logística Ltda",
+                    campo: valor,
+                }), 400,
+            )
+        self.assert_status(
+            self.client.put(rota, headers=self.auth(), json={
+                "nome_exibicao": "Transportadora Gate",
+                "razao_social": "Gate Logística Ltda",
+                "cnpj": "00000000000000",
+            }), 400,
+        )
+        self.assert_status(
+            self.client.put(rota, headers=self.auth(), json={
+                "nome_exibicao": "Transportadora Gate",
+                "razao_social": "Gate Logística Ltda",
+                "logo": "https://example.invalid/logo.png",
+            }), 400,
+        )
+
+        dados = {
+            "nome_exibicao": "Transportadora Gate",
+            "razao_social": "Gate Logística Ltda",
+            "cnpj": "11.444.777/0001-61",
+            "telefone": "(11) 3333-4444",
+            "whatsapp": "11999999999",
+            "email": "contato@example.invalid",
+            "endereco": "Rua de Teste, 123",
+        }
+        resposta = self.client.put(rota, headers=self.auth(), json=dados)
+        self.assert_status(resposta, 200)
+        self.assertEqual(resposta.get_json()["cnpj"], "11444777000161")
+        self.assertIsNone(resposta.get_json()["logo"])
+        self.assert_status(self.client.get(rota, headers=self.auth()), 200)
+
+        with self.app.app_context():
+            self.assertEqual(ConfiguracaoTransportadora.query.count(), 1)
+            self.assertEqual(nome_transportadora_relatorio(), "Transportadora Gate")
+            self.db.session.add(ConfiguracaoTransportadora(
+                id=2, nome_exibicao="Outra", razao_social="Outra Ltda"
+            ))
+            with self.assertRaises(IntegrityError):
+                self.db.session.commit()
+            self.db.session.rollback()
+
+        self.assert_status(self.client.get(
+            "/api/admin/relatorios/viagens/pdf", headers=self.auth()
+        ), 200)
+        self.assert_status(self.client.get(
+            "/api/admin/relatorios/financeiro/pdf", headers=self.auth()
+        ), 200)
+
+        with self.app.app_context():
+            operador = self.UsuarioSistema(
+                nome="Operador Gate", usuario="operador-config-gate",
+                senha="hash-de-teste", perfil="operador", ativo=True,
+            )
+            self.db.session.add(operador)
+            self.db.session.commit()
+            operador_token = create_access_token(identity=str(operador.id))
+
+        cabecalho_operador = self.auth(operador_token)
+        self.assert_status(self.client.get(rota, headers=cabecalho_operador), 200)
+        self.assert_status(self.client.put(
+            rota, headers=cabecalho_operador, json=dados
+        ), 403)
+        with self.app.app_context():
+            self.db.session.get(self.UsuarioSistema, operador.id).ativo = False
+            self.db.session.commit()
+        self.assert_status(self.client.get(rota, headers=cabecalho_operador), 401)
+        self.assert_status(self.client.put(
+            rota, headers=cabecalho_operador, json=dados
+        ), 401)
+        self.assert_status(self.client.put(
+            rota, headers=self.auth(), json={"nome_exibicao": "Nova Gate"}
+        ), 200)
+        with self.app.app_context():
+            self.assertEqual(ConfiguracaoTransportadora.query.count(), 1)
+            self.db.session.query(ConfiguracaoTransportadora).delete()
+            self.db.session.commit()
+
     def test_health_nao_expoe_informacoes_sensiveis(self):
         response = self.client.get("/health")
         corpo = response.get_data(as_text=True).lower()

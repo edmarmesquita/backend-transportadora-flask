@@ -17,7 +17,7 @@ PADRAO_CODIGO_RASTREAMENTO = re.compile(r"^[A-Z0-9-]{2,30}$")
 @public_bp.route("/")
 def index():
     return {
-        "mensagem": "Backend da Transportadora Ramos ativo.",
+        "mensagem": "Backend Rotanza ativo.",
         "status": "online"
     }
 
