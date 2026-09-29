@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import shutil
 import sqlite3
@@ -113,16 +114,251 @@ class PreStagingGateTest(unittest.TestCase):
         })
 
     def test_configuracao_transportadora_autorizacao_validacao_e_pdf(self):
-        from sqlalchemy.exc import IntegrityError
-        from flask_jwt_extended import create_access_token
         from models.configuracao_transportadora import ConfiguracaoTransportadora
-        from routes.admin_relatorios import nome_transportadora_relatorio
 
         rota = "/api/configuracao/transportadora"
         self.assert_status(self.client.get(rota), 401)
         with self.app.app_context():
             self.db.session.query(ConfiguracaoTransportadora).delete()
             self.db.session.commit()
+        self._validar_configuracao_transportadora_existente()
+
+    def test_logo_transportadora_upload_leitura_pdf_substituicao_e_remocao(self):
+        from flask_jwt_extended import create_access_token
+        from PIL import Image
+        from models.configuracao_transportadora import ConfiguracaoTransportadora
+        from services.logo_transportadora import logo_existente
+
+        rota = "/api/configuracao/transportadora/logo"
+
+        def imagem_bytes(formato):
+            buffer = io.BytesIO()
+            Image.new("RGB", (20, 12), "blue").save(buffer, format=formato)
+            return buffer.getvalue()
+
+        def enviar(dados, nome, headers=None):
+            return self.client.post(
+                rota,
+                headers=headers or self.auth(),
+                data={"arquivo": (io.BytesIO(dados), nome)},
+                content_type="multipart/form-data",
+            )
+
+        png = imagem_bytes("PNG")
+        buffer_dimensoes_excessivas = io.BytesIO()
+        Image.new("RGB", (4000, 2100), "white").save(
+            buffer_dimensoes_excessivas, format="PNG", optimize=True
+        )
+        png_dimensoes_excessivas = buffer_dimensoes_excessivas.getvalue()
+        for metodo in ("GET", "POST", "DELETE"):
+            self.assert_status(self.client.open(rota, method=metodo), 401)
+            self.assert_status(self.client.open(
+                rota,
+                method=metodo,
+                headers={"Authorization": "Bearer invalid"},
+            ), 401)
+        self.assert_status(enviar(png, "logo.png"), 409)
+
+        with self.app.app_context():
+            self.db.session.add(ConfiguracaoTransportadora(
+                id=1, nome_exibicao="Transportadora Teste",
+                razao_social="Transportadora Teste Ltda",
+            ))
+            operador = self.UsuarioSistema(
+                nome="Operador Logo", usuario="operador-logo-gate",
+                senha="hash-de-teste", perfil="operador", ativo=True,
+            )
+            inativo = self.UsuarioSistema(
+                nome="Inativo Logo", usuario="inativo-logo-gate",
+                senha="hash-de-teste", perfil="administrador", ativo=False,
+            )
+            self.db.session.add_all((operador, inativo))
+            self.db.session.commit()
+            token_operador = create_access_token(identity=str(operador.id))
+            token_inativo = create_access_token(identity=str(inativo.id))
+
+        self.assert_status(enviar(png, "logo.png", self.auth(token_operador)), 403)
+        self.assert_status(enviar(png, "logo.png", self.auth(token_inativo)), 401)
+        self.assert_status(self.client.get(rota, headers=self.auth(token_inativo)), 401)
+        self.assert_status(self.client.delete(rota, headers=self.auth(token_operador)), 403)
+        self.assert_status(self.client.delete(rota, headers=self.auth(token_inativo)), 401)
+        self.assert_status(self.client.get(rota, headers=self.auth()), 404)
+
+        for conteudo, nome, esperado in (
+            (b"", "vazio.png", 400),
+            (b"texto", "falso.png", 400),
+            (imagem_bytes("GIF"), "gif-renomeado.png", 400),
+            (png_dimensoes_excessivas, "dimensoes-excessivas.png", 400),
+            (png, "logo.txt", 400),
+            (png, "../logo.png", 400),
+            (b"x" * (5 * 1024 * 1024 + 1), "grande.png", 413),
+        ):
+            self.assert_status(enviar(conteudo, nome), esperado)
+
+        primeiro = enviar(png, "logo.png")
+        self.assert_status(primeiro, 201)
+        referencia = primeiro.get_json()["logo"]
+        self.assertRegex(referencia, r"^[0-9a-f]{32}\.png$")
+        with self.app.app_context():
+            configuracao = self.db.session.get(ConfiguracaoTransportadora, 1)
+            self.assertEqual(configuracao.logo, referencia)
+            caminho = logo_existente(str(self.upload_dir), referencia)
+            self.assertIsNotNone(caminho)
+            log_upload = self.LogAcao.query.filter_by(
+                entidade="ConfiguracaoTransportadora",
+                acao="Upload de logo da transportadora",
+            ).one()
+            self.assertEqual(json.loads(log_upload.antes), {"logo": None})
+            self.assertEqual(
+                json.loads(log_upload.depois), {"logo": referencia}
+            )
+
+        resposta = self.client.get(rota, headers=self.auth(token_operador))
+        self.assert_status(resposta, 200)
+        self.assertEqual(resposta.data, png)
+        self.assertEqual(resposta.mimetype, "image/png")
+        self.assertEqual(resposta.headers["Cache-Control"], "private, no-store")
+        resposta.close()
+        self.assert_status(self.client.put(
+            "/api/configuracao/transportadora", headers=self.auth(),
+            json={"logo": "../outro.png"},
+        ), 400)
+
+        for rota_pdf in (
+            "/api/admin/relatorios/viagens/pdf",
+            "/api/admin/relatorios/financeiro/pdf",
+        ):
+            resposta_pdf = self.client.get(rota_pdf, headers=self.auth())
+            self.assert_status(resposta_pdf, 200)
+            self.assertIn(b"/Subtype /Image", resposta_pdf.data)
+
+        with patch("routes.configuracao_transportadora.registrar_log", side_effect=RuntimeError):
+            self.assert_status(enviar(imagem_bytes("JPEG"), "falha.jpg"), 500)
+        with self.app.app_context():
+            self.assertEqual(
+                self.db.session.get(ConfiguracaoTransportadora, 1).logo,
+                referencia,
+            )
+            self.assertEqual(
+                len(list((self.upload_dir / "logos_transportadora").iterdir())), 1
+            )
+
+        with patch("sqlalchemy.orm.Session.commit", side_effect=RuntimeError):
+            self.assert_status(enviar(imagem_bytes("JPEG"), "falha-commit.jpg"), 500)
+        with self.app.app_context():
+            self.assertEqual(
+                self.db.session.get(ConfiguracaoTransportadora, 1).logo,
+                referencia,
+            )
+            self.assertEqual(
+                len(list((self.upload_dir / "logos_transportadora").iterdir())), 1
+            )
+
+        segundo = enviar(imagem_bytes("JPEG"), "novo.jpeg")
+        self.assert_status(segundo, 201)
+        referencia_nova = segundo.get_json()["logo"]
+        self.assertNotEqual(referencia, referencia_nova)
+        self.assertTrue(referencia_nova.endswith(".jpg"))
+        with self.app.app_context():
+            self.assertIsNone(logo_existente(str(self.upload_dir), referencia))
+            self.assertIsNotNone(logo_existente(str(self.upload_dir), referencia_nova))
+
+        with patch("routes.configuracao_transportadora.registrar_log", side_effect=RuntimeError):
+            self.assert_status(self.client.delete(rota, headers=self.auth()), 500)
+        with self.app.app_context():
+            self.assertEqual(
+                self.db.session.get(ConfiguracaoTransportadora, 1).logo,
+                referencia_nova,
+            )
+            self.assertIsNotNone(
+                logo_existente(str(self.upload_dir), referencia_nova)
+            )
+
+        self.assert_status(self.client.delete(rota, headers=self.auth()), 200)
+        self.assert_status(self.client.get(rota, headers=self.auth()), 404)
+        with self.app.app_context():
+            self.assertIsNone(self.db.session.get(ConfiguracaoTransportadora, 1).logo)
+            self.assertIsNone(logo_existente(str(self.upload_dir), referencia_nova))
+            log_remocao = self.LogAcao.query.filter_by(
+                entidade="ConfiguracaoTransportadora",
+                acao="Remoção de logo da transportadora",
+            ).one()
+            self.assertEqual(
+                json.loads(log_remocao.antes), {"logo": referencia_nova}
+            )
+            self.assertEqual(json.loads(log_remocao.depois), {"logo": None})
+            self.db.session.query(ConfiguracaoTransportadora).delete()
+            self.db.session.commit()
+
+    def test_logo_transportadora_pdf_sem_arquivo_e_referencia_invalida(self):
+        from models.configuracao_transportadora import ConfiguracaoTransportadora
+        from services.logo_transportadora import caminho_logo
+
+        rota_logo = "/api/configuracao/transportadora/logo"
+        rotas_pdf = (
+            "/api/admin/relatorios/viagens/pdf",
+            "/api/admin/relatorios/financeiro/pdf",
+        )
+        for rota_pdf in rotas_pdf:
+            resposta = self.client.get(rota_pdf, headers=self.auth())
+            self.assert_status(resposta, 200)
+            self.assertNotIn(b"/Subtype /Image", resposta.data)
+
+        with self.app.app_context():
+            self.db.session.add(ConfiguracaoTransportadora(
+                id=1, nome_exibicao="Transportadora Teste",
+                razao_social="Transportadora Teste Ltda",
+                logo="../arquivo-fora.png",
+            ))
+            self.db.session.commit()
+        arquivo_fora = self.temp_dir / "arquivo-fora.png"
+        arquivo_fora.write_bytes(b"nao-remover")
+        self.assert_status(self.client.get(rota_logo, headers=self.auth()), 404)
+        for rota_pdf in rotas_pdf:
+            self.assert_status(self.client.get(rota_pdf, headers=self.auth()), 200)
+        self.assert_status(self.client.delete(rota_logo, headers=self.auth()), 200)
+        self.assertEqual(arquivo_fora.read_bytes(), b"nao-remover")
+
+        with self.app.app_context():
+            self.db.session.get(ConfiguracaoTransportadora, 1).logo = "a" * 32 + ".png"
+            self.db.session.commit()
+        for rota_pdf in rotas_pdf:
+            resposta = self.client.get(rota_pdf, headers=self.auth())
+            self.assert_status(resposta, 200)
+            self.assertNotIn(b"/Subtype /Image", resposta.data)
+        self.assert_status(self.client.delete(rota_logo, headers=self.auth()), 200)
+        with self.app.app_context():
+            self.assertIsNone(
+                self.db.session.get(ConfiguracaoTransportadora, 1).logo
+            )
+            self.db.session.get(ConfiguracaoTransportadora, 1).logo = (
+                "a" * 32 + ".png"
+            )
+            self.db.session.commit()
+        caminho_corrompido = caminho_logo(str(self.upload_dir), "a" * 32 + ".png")
+        Path(caminho_corrompido).parent.mkdir(parents=True, exist_ok=True)
+        Path(caminho_corrompido).write_bytes(b"nao-e-imagem")
+        for rota_pdf in rotas_pdf:
+            resposta = self.client.get(rota_pdf, headers=self.auth())
+            self.assert_status(resposta, 200)
+            self.assertNotIn(b"/Subtype /Image", resposta.data)
+        Path(caminho_corrompido).unlink()
+        with self.app.app_context():
+            self.db.session.query(ConfiguracaoTransportadora).delete()
+            self.LogAcao.query.filter_by(
+                entidade="ConfiguracaoTransportadora",
+                acao="Remoção de logo da transportadora",
+            ).delete()
+            self.db.session.commit()
+
+    def _validar_configuracao_transportadora_existente(self):
+        from sqlalchemy.exc import IntegrityError
+        from flask_jwt_extended import create_access_token
+        from models.configuracao_transportadora import ConfiguracaoTransportadora
+        from routes.admin_relatorios import nome_transportadora_relatorio
+
+        rota = "/api/configuracao/transportadora"
+        with self.app.app_context():
             self.assertEqual(nome_transportadora_relatorio(), "TRANSPORTADORA")
 
         vazio = self.client.get(rota, headers=self.auth())

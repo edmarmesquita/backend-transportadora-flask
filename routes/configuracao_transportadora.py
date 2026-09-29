@@ -1,12 +1,17 @@
+import os
 import re
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from extensions import db
 from models.configuracao_transportadora import ConfiguracaoTransportadora
 from models.usuarios import UsuarioSistema
 from services.auditoria import registrar_log, snapshot_objeto
+from services.logo_transportadora import (
+    LogoInvalido, caminho_logo, logo_existente, pasta_logos, validar_logo,
+)
+from utils.arquivos import remover_arquivo_criado
 
 
 configuracao_transportadora_bp = Blueprint(
@@ -139,3 +144,132 @@ def editar_configuracao_transportadora():
     )
     db.session.commit()
     return jsonify(_serializar(configuracao)), 200
+
+
+@configuracao_transportadora_bp.route(
+    "/api/configuracao/transportadora/logo", methods=["GET"]
+)
+@jwt_required()
+def obter_logo_transportadora():
+    usuario = _usuario_atual()
+    if not usuario or not usuario.ativo:
+        return jsonify({"erro": "Usuário não autorizado."}), 401
+
+    configuracao = db.session.get(ConfiguracaoTransportadora, 1)
+    referencia = configuracao.logo if configuracao else None
+    caminho = logo_existente(current_app.config["UPLOAD_FOLDER"], referencia)
+    if not caminho:
+        return jsonify({"erro": "Logo não encontrado."}), 404
+
+    tipo = "image/png" if referencia.endswith(".png") else "image/jpeg"
+    resposta = send_file(caminho, mimetype=tipo)
+    resposta.headers["Cache-Control"] = "private, no-store"
+    return resposta
+
+
+@configuracao_transportadora_bp.route(
+    "/api/configuracao/transportadora/logo", methods=["POST"]
+)
+@jwt_required()
+def enviar_logo_transportadora():
+    usuario = _usuario_atual()
+    if not usuario or not usuario.ativo:
+        return jsonify({"erro": "Usuário não autorizado."}), 401
+    if str(usuario.perfil).strip().lower() != "administrador":
+        return jsonify({"erro": "Acesso não autorizado."}), 403
+
+    configuracao = db.session.get(ConfiguracaoTransportadora, 1)
+    if not configuracao:
+        return jsonify({"erro": "Configure a transportadora antes do logo."}), 409
+
+    arquivo = request.files.get("arquivo")
+    if arquivo is None:
+        return jsonify({"erro": "Nenhum arquivo enviado."}), 400
+    try:
+        dados, referencia = validar_logo(arquivo)
+    except LogoInvalido as erro:
+        return jsonify({"erro": str(erro)}), erro.status
+
+    pasta = pasta_logos(current_app.config["UPLOAD_FOLDER"])
+    caminho_novo = caminho_logo(current_app.config["UPLOAD_FOLDER"], referencia)
+    referencia_anterior = configuracao.logo
+    try:
+        os.makedirs(pasta, exist_ok=True)
+        with open(caminho_novo, "xb") as destino:
+            destino.write(dados)
+
+        configuracao.logo = referencia
+        registrar_log(
+            acao="Upload de logo da transportadora",
+            modulo="Configuração",
+            entidade="ConfiguracaoTransportadora",
+            entidade_id=1,
+            antes={"logo": referencia_anterior},
+            depois={"logo": referencia},
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil,
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        remover_arquivo_criado(caminho_novo, current_app.logger)
+        current_app.logger.exception("Falha ao salvar logo da transportadora.")
+        return jsonify({"erro": "Não foi possível salvar o logo."}), 500
+
+    if referencia_anterior:
+        caminho_antigo = caminho_logo(
+            current_app.config["UPLOAD_FOLDER"], referencia_anterior
+        )
+        if caminho_antigo and os.path.isfile(caminho_antigo):
+            try:
+                os.remove(caminho_antigo)
+            except OSError:
+                current_app.logger.exception("Falha ao remover logo anterior.")
+
+    return jsonify({"logo": referencia}), 201
+
+
+@configuracao_transportadora_bp.route(
+    "/api/configuracao/transportadora/logo", methods=["DELETE"]
+)
+@jwt_required()
+def remover_logo_transportadora():
+    usuario = _usuario_atual()
+    if not usuario or not usuario.ativo:
+        return jsonify({"erro": "Usuário não autorizado."}), 401
+    if str(usuario.perfil).strip().lower() != "administrador":
+        return jsonify({"erro": "Acesso não autorizado."}), 403
+
+    configuracao = db.session.get(ConfiguracaoTransportadora, 1)
+    if not configuracao or not configuracao.logo:
+        return jsonify({"erro": "Logo não encontrado."}), 404
+
+    referencia = configuracao.logo
+    try:
+        configuracao.logo = None
+        registrar_log(
+            acao="Remoção de logo da transportadora",
+            modulo="Configuração",
+            entidade="ConfiguracaoTransportadora",
+            entidade_id=1,
+            antes={"logo": referencia},
+            depois={"logo": None},
+            usuario_id=usuario.id,
+            usuario_nome=usuario.nome,
+            perfil=usuario.perfil,
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Falha ao remover logo da transportadora.")
+        return jsonify({"erro": "Não foi possível remover o logo."}), 500
+
+    caminho = caminho_logo(current_app.config["UPLOAD_FOLDER"], referencia)
+    if caminho and os.path.isfile(caminho):
+        try:
+            os.remove(caminho)
+        except OSError:
+            current_app.logger.exception("Falha ao remover arquivo de logo.")
+
+    return jsonify({"logo": None}), 200

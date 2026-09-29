@@ -1,8 +1,10 @@
 import io
 
-from flask import Blueprint, jsonify, send_file
+from flask import Blueprint, current_app, jsonify, send_file
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from PIL import Image
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from extensions import db
@@ -11,6 +13,7 @@ from models.configuracao_transportadora import ConfiguracaoTransportadora
 from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista, Veiculo
 from models.usuarios import UsuarioSistema
+from services.logo_transportadora import logo_existente
 
 
 admin_relatorios_bp = Blueprint(
@@ -24,6 +27,26 @@ def nome_transportadora_relatorio():
     if configuracao and configuracao.nome_exibicao:
         return configuracao.nome_exibicao
     return "TRANSPORTADORA"
+
+
+def desenhar_logo_relatorio(pdf):
+    configuracao = db.session.get(ConfiguracaoTransportadora, 1)
+    referencia = configuracao.logo if configuracao else None
+    caminho = logo_existente(current_app.config["UPLOAD_FOLDER"], referencia)
+    if not caminho:
+        return False
+    try:
+        with Image.open(caminho, formats=("PNG", "JPEG")) as imagem:
+            imagem.load()
+            pdf.drawImage(
+                ImageReader(imagem.copy()), 50, 782,
+                width=84, height=56, preserveAspectRatio=True,
+                anchor="c", mask="auto",
+            )
+    except Exception:
+        current_app.logger.warning("Logo indisponível para o relatório.")
+        return False
+    return True
 
 
 @admin_relatorios_bp.route("/api/admin/relatorios/viagens")
@@ -80,9 +103,10 @@ def api_relatorio_viagens_pdf():
 
     pdf.setTitle("Relatório de Viagens")
 
+    tem_logo = desenhar_logo_relatorio(pdf)
     pdf.setFont("Helvetica-Bold", 16)
     pdf.drawString(
-        50,
+        144 if tem_logo else 50,
         800,
         nome_transportadora_relatorio()
     )
@@ -90,7 +114,7 @@ def api_relatorio_viagens_pdf():
     pdf.setFont("Helvetica", 12)
     pdf.drawString(
         50,
-        780,
+        764 if tem_logo else 780,
         "Relatório de Viagens"
     )
 
@@ -191,13 +215,14 @@ def api_relatorio_financeiro_pdf():
         "Relatório Financeiro"
     )
 
+    tem_logo = desenhar_logo_relatorio(pdf)
     pdf.setFont(
         "Helvetica-Bold",
         16
     )
 
     pdf.drawString(
-        50,
+        144 if tem_logo else 50,
         800,
         nome_transportadora_relatorio()
     )
@@ -209,7 +234,7 @@ def api_relatorio_financeiro_pdf():
 
     pdf.drawString(
         50,
-        780,
+        764 if tem_logo else 780,
         "Relatório Financeiro"
     )
 
