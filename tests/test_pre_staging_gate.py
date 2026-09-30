@@ -552,6 +552,340 @@ class PreStagingGateTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
 
+    def test_admin_usuario_redefine_senha_cliente_com_email_legado_duplicado(self):
+        from utils.senhas import gerar_hash_senha, verificar_senha
+
+        email = "cliente-edicao-legado@example.invalid"
+
+        with self.app.app_context():
+            cliente = self.Cliente(
+                razao_social="Cliente Edicao Legado",
+                ativo=True,
+            )
+            usuario = self.UsuarioSistema(
+                nome="Cliente Edicao",
+                usuario="cliente-edicao-gate",
+                email=email,
+                senha=gerar_hash_senha("senha-anterior-cliente"),
+                perfil="cliente",
+                ativo=True,
+            )
+            usuario_duplicado = self.UsuarioSistema(
+                nome="Cliente Duplicado Legado",
+                usuario="cliente-duplicado-legado-gate",
+                email=email,
+                senha=gerar_hash_senha("senha-duplicado-cliente"),
+                perfil="cliente",
+                ativo=True,
+            )
+            self.db.session.add_all([
+                cliente,
+                usuario,
+                usuario_duplicado,
+            ])
+            self.db.session.flush()
+            cliente_usuario = self.ClienteUsuario(
+                cliente_id=cliente.id,
+                usuario_sistema_id=usuario.id,
+                nome=usuario.nome,
+                empresa=cliente.razao_social,
+                email=email,
+                senha=usuario.senha,
+                ativo=True,
+            )
+            self.db.session.add(cliente_usuario)
+            self.db.session.commit()
+            usuario_id = usuario.id
+            cliente_id = cliente.id
+            cliente_usuario_id = cliente_usuario.id
+            senha_duplicado = usuario_duplicado.senha
+
+        response = self.client.put(
+            f"/api/admin/usuarios/{usuario_id}",
+            json={
+                "nome": "Cliente Edicao",
+                "usuario": "cliente-edicao-gate",
+                "email": "  CLIENTE-EDICAO-LEGADO@EXAMPLE.INVALID  ",
+                "perfil": "cliente",
+                "ativo": True,
+                "cliente_id": cliente_id,
+                "redefinir_senha": True,
+                "nova_senha": "nova-senha-cliente",
+            },
+            headers=self.auth(),
+        )
+
+        self.assert_status(response, 200)
+        with self.app.app_context():
+            usuario = self.db.session.get(self.UsuarioSistema, usuario_id)
+            cliente_usuario = self.db.session.get(
+                self.ClienteUsuario,
+                cliente_usuario_id,
+            )
+            usuario_duplicado = self.UsuarioSistema.query.filter_by(
+                usuario="cliente-duplicado-legado-gate"
+            ).first()
+            self.assertTrue(verificar_senha(
+                usuario.senha,
+                "nova-senha-cliente",
+            ))
+            self.assertEqual(cliente_usuario.senha, usuario.senha)
+            self.assertEqual(usuario.email, email)
+            self.assertEqual(usuario_duplicado.senha, senha_duplicado)
+
+    def test_admin_usuario_redefine_senha_cliente_sem_recriar_vinculo(self):
+        from utils.senhas import gerar_hash_senha, verificar_senha
+
+        email = "cliente-sem-vinculo@example.invalid"
+
+        with self.app.app_context():
+            usuario = self.UsuarioSistema(
+                nome="Cliente Sem Vinculo",
+                usuario="cliente-sem-vinculo-gate",
+                email=email,
+                senha=gerar_hash_senha("senha-anterior-sem-vinculo"),
+                perfil="cliente",
+                ativo=True,
+            )
+            usuario_duplicado = self.UsuarioSistema(
+                nome="Duplicado Sem Vinculo",
+                usuario="duplicado-sem-vinculo-gate",
+                email=email,
+                senha=gerar_hash_senha("senha-duplicado-sem-vinculo"),
+                perfil="cliente",
+                ativo=True,
+            )
+            self.db.session.add_all([usuario, usuario_duplicado])
+            self.db.session.commit()
+            usuario_id = usuario.id
+
+        response = self.client.put(
+            f"/api/admin/usuarios/{usuario_id}",
+            json={
+                "redefinir_senha": True,
+                "nova_senha": "nova-senha-sem-vinculo",
+            },
+            headers=self.auth(),
+        )
+
+        self.assert_status(response, 200)
+        with self.app.app_context():
+            usuario = self.db.session.get(self.UsuarioSistema, usuario_id)
+            cliente_usuario = self.ClienteUsuario.query.filter_by(
+                usuario_sistema_id=usuario_id
+            ).first()
+            self.assertTrue(verificar_senha(
+                usuario.senha,
+                "nova-senha-sem-vinculo",
+            ))
+            self.assertIsNone(cliente_usuario)
+
+    def test_admin_usuario_redefine_senha_motorista_com_email_legado_duplicado(self):
+        from utils.senhas import gerar_hash_senha, verificar_senha
+
+        email = "motorista-edicao-legado@example.invalid"
+
+        with self.app.app_context():
+            usuario = self.UsuarioSistema(
+                nome="Motorista Edicao",
+                usuario="motorista-edicao-gate",
+                email=email,
+                senha=gerar_hash_senha("senha-anterior-motorista"),
+                perfil="motorista",
+                ativo=True,
+            )
+            usuario_duplicado = self.UsuarioSistema(
+                nome="Motorista Duplicado Legado",
+                usuario="motorista-duplicado-legado-gate",
+                email=email,
+                senha=gerar_hash_senha("senha-duplicado-motorista"),
+                perfil="motorista",
+                ativo=True,
+            )
+            self.db.session.add_all([usuario, usuario_duplicado])
+            self.db.session.flush()
+            motorista = self.Motorista(
+                nome=usuario.nome,
+                usuario=usuario.usuario,
+                email=email,
+                senha=usuario.senha,
+                usuario_sistema_id=usuario.id,
+                status="Ativo",
+            )
+            self.db.session.add(motorista)
+            self.db.session.commit()
+            usuario_id = usuario.id
+            motorista_id = motorista.id
+
+        response = self.client.put(
+            f"/api/admin/usuarios/{usuario_id}",
+            json={
+                "redefinir_senha": True,
+                "nova_senha": "nova-senha-motorista",
+            },
+            headers=self.auth(),
+        )
+
+        self.assert_status(response, 200)
+        with self.app.app_context():
+            usuario = self.db.session.get(self.UsuarioSistema, usuario_id)
+            motorista = self.db.session.get(self.Motorista, motorista_id)
+            self.assertTrue(verificar_senha(
+                usuario.senha,
+                "nova-senha-motorista",
+            ))
+            self.assertEqual(motorista.senha, usuario.senha)
+
+    def test_admin_usuario_mantem_conflitos_reais_de_email_e_usuario(self):
+        from utils.senhas import gerar_hash_senha
+
+        with self.app.app_context():
+            usuario = self.UsuarioSistema(
+                nome="Usuario Conflitos",
+                usuario="usuario-conflitos-gate",
+                email="usuario-conflitos@example.invalid",
+                senha=gerar_hash_senha("senha-conflitos"),
+                perfil="operador",
+                ativo=True,
+            )
+            existente = self.UsuarioSistema(
+                nome="Usuario Existente",
+                usuario="usuario-existente-gate",
+                email="usuario-existente@example.invalid",
+                senha=gerar_hash_senha("senha-existente"),
+                perfil="operador",
+                ativo=True,
+            )
+            self.db.session.add_all([usuario, existente])
+            self.db.session.commit()
+            usuario_id = usuario.id
+
+        email_response = self.client.put(
+            f"/api/admin/usuarios/{usuario_id}",
+            json={"email": "  USUARIO-EXISTENTE@EXAMPLE.INVALID  "},
+            headers=self.auth(),
+        )
+        self.assert_status(email_response, 409)
+        self.assertEqual(
+            email_response.get_json()["erro"],
+            "Este e-mail já está cadastrado no sistema.",
+        )
+
+        usuario_response = self.client.put(
+            f"/api/admin/usuarios/{usuario_id}",
+            json={"usuario": "usuario-existente-gate"},
+            headers=self.auth(),
+        )
+        self.assert_status(usuario_response, 409)
+        self.assertEqual(
+            usuario_response.get_json()["erro"],
+            "Este nome de usuário já está cadastrado.",
+        )
+
+        with self.app.app_context():
+            usuario = self.db.session.get(self.UsuarioSistema, usuario_id)
+            self.assertEqual(usuario.usuario, "usuario-conflitos-gate")
+            self.assertEqual(
+                usuario.email,
+                "usuario-conflitos@example.invalid",
+            )
+
+    def test_admin_usuario_preserva_validacoes_e_normaliza_email(self):
+        from utils.senhas import gerar_hash_senha
+
+        with self.app.app_context():
+            usuario = self.UsuarioSistema(
+                nome="Usuario Validacoes",
+                usuario="usuario-validacoes-gate",
+                email="usuario-validacoes@example.invalid",
+                senha=gerar_hash_senha("senha-validacoes"),
+                perfil="operador",
+                ativo=True,
+            )
+            cliente_atual = self.Cliente(
+                razao_social="Cliente Atual Validacoes",
+                ativo=True,
+            )
+            cliente_inativo = self.Cliente(
+                razao_social="Cliente Inativo Validacoes",
+                ativo=False,
+            )
+            usuario_cliente = self.UsuarioSistema(
+                nome="Cliente Validacoes",
+                usuario="cliente-validacoes-gate",
+                email="cliente-validacoes@example.invalid",
+                senha=gerar_hash_senha("senha-cliente-validacoes"),
+                perfil="cliente",
+                ativo=True,
+            )
+            self.db.session.add_all([
+                usuario,
+                cliente_atual,
+                cliente_inativo,
+                usuario_cliente,
+            ])
+            self.db.session.flush()
+            self.db.session.add(self.ClienteUsuario(
+                cliente_id=cliente_atual.id,
+                usuario_sistema_id=usuario_cliente.id,
+                nome=usuario_cliente.nome,
+                empresa=cliente_atual.razao_social,
+                email=usuario_cliente.email,
+                senha=usuario_cliente.senha,
+                ativo=True,
+            ))
+            self.db.session.commit()
+            usuario_id = usuario.id
+            usuario_cliente_id = usuario_cliente.id
+            cliente_atual_id = cliente_atual.id
+            cliente_inativo_id = cliente_inativo.id
+
+        senha_curta = self.client.put(
+            f"/api/admin/usuarios/{usuario_id}",
+            json={
+                "redefinir_senha": True,
+                "nova_senha": "curta",
+            },
+            headers=self.auth(),
+        )
+        self.assert_status(senha_curta, 400)
+
+        cliente_inativo = self.client.put(
+            f"/api/admin/usuarios/{usuario_cliente_id}",
+            json={
+                "cliente_id": cliente_inativo_id,
+                "redefinir_senha": True,
+                "nova_senha": "nova-senha-validacoes",
+            },
+            headers=self.auth(),
+        )
+        self.assert_status(cliente_inativo, 400)
+
+        email_normalizado = self.client.put(
+            f"/api/admin/usuarios/{usuario_id}",
+            json={"email": "  NOVO-EMAIL-VALIDACOES@EXAMPLE.INVALID  "},
+            headers=self.auth(),
+        )
+        self.assert_status(email_normalizado, 200)
+
+        with self.app.app_context():
+            usuario = self.db.session.get(self.UsuarioSistema, usuario_id)
+            usuario_cliente = self.db.session.get(
+                self.UsuarioSistema,
+                usuario_cliente_id,
+            )
+            self.assertEqual(
+                usuario.email,
+                "novo-email-validacoes@example.invalid",
+            )
+            self.assertEqual(
+                self.ClienteUsuario.query.filter_by(
+                    usuario_sistema_id=usuario_cliente_id
+                ).first().cliente_id,
+                cliente_atual_id,
+            )
+            self.assertEqual(usuario_cliente.perfil, "cliente")
+
     def test_admin_journey_and_audit(self):
         client_data = {
             "razao_social": "Cliente Gate",

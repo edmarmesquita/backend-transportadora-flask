@@ -451,7 +451,7 @@ def api_editar_usuario(id):
 
     email = str(
         dados.get("email", usuario.email or "")
-    ).strip()
+    ).strip().lower()
 
     perfil = str(
         dados.get("perfil", usuario.perfil)
@@ -503,9 +503,63 @@ def api_editar_usuario(id):
         usuario_sistema_id=usuario.id
     ).first()
 
+    redefinir_senha = bool(
+        dados.get("redefinir_senha", False)
+    )
+
+    nova_senha = str(
+        dados.get("nova_senha", "")
+    ).strip()
+
+    if redefinir_senha and len(nova_senha) < 6:
+        return jsonify({
+            "erro": (
+                "A nova senha deve ter "
+                "pelo menos 6 caracteres."
+            )
+        }), 400
+
+    nome_alterado = nome != usuario.nome
+    usuario_alterado = nome_usuario != usuario.usuario
+    email_atual_normalizado = str(
+        usuario.email or ""
+    ).strip().lower()
+    email_alterado = email != email_atual_normalizado
+    perfil_alterado = perfil != perfil_anterior
+    ativo_alterado = bool(ativo) != bool(usuario.ativo)
+
+    cliente_id_atual = (
+        cliente_usuario.cliente_id
+        if cliente_usuario
+        else None
+    )
+    cliente_id_alterado = False
+
+    if (
+        (perfil == "cliente" or perfil_anterior == "cliente")
+        and "cliente_id" in dados
+    ):
+        try:
+            cliente_id_informado = int(dados.get("cliente_id"))
+            cliente_id_alterado = (
+                cliente_id_informado != cliente_id_atual
+            )
+        except (TypeError, ValueError):
+            cliente_id_alterado = True
+
+    somente_redefinicao_senha = (
+        redefinir_senha
+        and not nome_alterado
+        and not usuario_alterado
+        and not email_alterado
+        and not perfil_alterado
+        and not ativo_alterado
+        and not cliente_id_alterado
+    )
+
     cliente_comercial = None
 
-    if perfil == "cliente":
+    if perfil == "cliente" and not somente_redefinicao_senha:
         if not email:
             return jsonify({
                 "erro": "O e-mail é obrigatório para usuários clientes."
@@ -557,17 +611,18 @@ def api_editar_usuario(id):
                     )
                 }), 409
 
-    usuario_duplicado = UsuarioSistema.query.filter(
-        UsuarioSistema.usuario == nome_usuario,
-        UsuarioSistema.id != usuario.id
-    ).first()
+    if usuario_alterado:
+        usuario_duplicado = UsuarioSistema.query.filter(
+            UsuarioSistema.usuario == nome_usuario,
+            UsuarioSistema.id != usuario.id
+        ).first()
 
-    if usuario_duplicado:
-        return jsonify({
-            "erro": "Este nome de usuário já está cadastrado."
-        }), 409
+        if usuario_duplicado:
+            return jsonify({
+                "erro": "Este nome de usuário já está cadastrado."
+            }), 409
 
-    if email:
+    if email_alterado and email:
         email_duplicado = UsuarioSistema.query.filter(
             UsuarioSistema.email == email,
             UsuarioSistema.id != usuario.id
@@ -578,6 +633,23 @@ def api_editar_usuario(id):
                 "erro": "Este e-mail já está cadastrado no sistema."
             }), 409
 
+    validar_email_cliente = (
+        email_alterado
+        or (
+            perfil == "cliente"
+            and (
+                perfil_alterado
+                or cliente_id_alterado
+                or not cliente_usuario
+            )
+        )
+    )
+
+    if (
+        email
+        and not somente_redefinicao_senha
+        and validar_email_cliente
+    ):
         consulta_cliente_email = ClienteUsuario.query.filter(
             ClienteUsuario.email == email
         )
@@ -604,22 +676,6 @@ def api_editar_usuario(id):
                 )
             }), 409
 
-    redefinir_senha = bool(
-        dados.get("redefinir_senha", False)
-    )
-
-    nova_senha = str(
-        dados.get("nova_senha", "")
-    ).strip()
-
-    if redefinir_senha and len(nova_senha) < 6:
-        return jsonify({
-            "erro": (
-                "A nova senha deve ter "
-                "pelo menos 6 caracteres."
-            )
-        }), 400
-
     dados_antes = {
         "nome": usuario.nome,
         "usuario": usuario.usuario,
@@ -629,16 +685,17 @@ def api_editar_usuario(id):
     }
 
     try:
-        usuario.nome = nome
-        usuario.usuario = nome_usuario
-        usuario.email = email
-        usuario.perfil = perfil
-        usuario.ativo = bool(ativo)
+        if not somente_redefinicao_senha:
+            usuario.nome = nome
+            usuario.usuario = nome_usuario
+            usuario.email = email
+            usuario.perfil = perfil
+            usuario.ativo = bool(ativo)
 
         if redefinir_senha:
             usuario.senha = gerar_hash_senha(nova_senha)
 
-        if perfil == "cliente":
+        if perfil == "cliente" and not somente_redefinicao_senha:
             if not cliente_usuario:
                 if not senha_esta_em_hash(usuario.senha):
                     usuario.senha = gerar_hash_senha(
