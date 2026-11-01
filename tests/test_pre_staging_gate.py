@@ -40,7 +40,7 @@ class PreStagingGateTest(unittest.TestCase):
         from flask_jwt_extended import create_access_token
         from models.auditoria import LogAcao
         from models.clientes import Cliente, ClienteUsuario
-        from models.comprovantes import ArquivoComprovanteViagem
+        from models.comprovantes import ArquivoComprovanteViagem, ComprovanteEntrega
         from models.historicos import HistoricoRastreamento, HistoricoViagem
         from models.localizacoes import LocalizacaoViagem
         from models.operacao import Rastreamento, Viagem
@@ -55,6 +55,7 @@ class PreStagingGateTest(unittest.TestCase):
         cls.Cliente = Cliente
         cls.ClienteUsuario = ClienteUsuario
         cls.ArquivoComprovanteViagem = ArquivoComprovanteViagem
+        cls.ComprovanteEntrega = ComprovanteEntrega
         cls.HistoricoRastreamento = HistoricoRastreamento
         cls.HistoricoViagem = HistoricoViagem
         cls.LocalizacaoViagem = LocalizacaoViagem
@@ -1443,6 +1444,125 @@ class PreStagingGateTest(unittest.TestCase):
                 ).count(),
                 historicos_viagem_antes_nao_autorizada,
             )
+
+    def test_portal_motorista_formata_data_upload_utc_e_preserva_isolamento(self):
+        instante_upload_utc_naive = datetime(2026, 11, 1, 14, 3)
+        with self.app.app_context():
+            usuario_motorista = self.UsuarioSistema(
+                nome="Motorista Comprovante UTC",
+                usuario="motorista-comprovante-utc",
+                email="motorista-comprovante-utc@example.invalid",
+                senha="hash-motorista",
+                perfil="motorista",
+                ativo=True,
+            )
+            usuario_outro = self.UsuarioSistema(
+                nome="Outro Motorista Comprovante UTC",
+                usuario="outro-motorista-comprovante-utc",
+                email="outro-motorista-comprovante-utc@example.invalid",
+                senha="hash-outro",
+                perfil="motorista",
+                ativo=True,
+            )
+            self.db.session.add_all([usuario_motorista, usuario_outro])
+            self.db.session.flush()
+            motorista = self.Motorista(
+                nome=usuario_motorista.nome,
+                usuario_sistema_id=usuario_motorista.id,
+                status="Ativo",
+            )
+            outro_motorista = self.Motorista(
+                nome=usuario_outro.nome,
+                usuario_sistema_id=usuario_outro.id,
+                status="Ativo",
+            )
+            self.db.session.add_all([motorista, outro_motorista])
+            self.db.session.flush()
+            carga = self.Rastreamento(
+                codigo="GATE-COMPROVANTE-UTC",
+                cliente="Cliente Comprovante UTC",
+                status="Em trânsito",
+                local_atual="São Paulo/SP",
+                destino="Campinas/SP",
+            )
+            self.db.session.add(carga)
+            self.db.session.flush()
+            viagem = self.Viagem(
+                rastreamento_id=carga.id,
+                motorista_id=motorista.id,
+                origem="São Paulo/SP",
+                destino="Campinas/SP",
+                status="Em trânsito",
+            )
+            self.db.session.add(viagem)
+            self.db.session.flush()
+            arquivo = self.ArquivoComprovanteViagem(
+                viagem_id=viagem.id,
+                nome_arquivo="comprovante.pdf",
+                data_upload=instante_upload_utc_naive,
+            )
+            arquivo_sem_data = self.ArquivoComprovanteViagem(
+                viagem_id=viagem.id,
+                nome_arquivo="comprovante-sem-data.pdf",
+            )
+            self.db.session.add_all([arquivo, arquivo_sem_data])
+            self.db.session.flush()
+            arquivo_sem_data.data_upload = None
+            comprovante_entrega = self.ComprovanteEntrega(
+                viagem_id=viagem.id,
+                recebedor="Roberto Almeida",
+                observacao="Mercadoria recebida em perfeito estado, sem avarias ou ressalvas.",
+                data_entrega=datetime(2026, 11, 1, 14, 7),
+            )
+            self.db.session.add(comprovante_entrega)
+            self.db.session.commit()
+            viagem_id = viagem.id
+            token_motorista = type(self).create_access_token(
+                identity=str(usuario_motorista.id)
+            )
+            token_outro = type(self).create_access_token(
+                identity=str(usuario_outro.id)
+            )
+
+        resposta = self.client.get(
+            f"/api/motorista/minhas-viagens/{viagem_id}/comprovantes/arquivos",
+            headers=self.auth(token_motorista),
+        )
+        self.assert_status(resposta, 200)
+        arquivos = {item["nome_arquivo"]: item for item in resposta.get_json()}
+        self.assertEqual(
+            arquivos["comprovante.pdf"]["data_upload"],
+            "01/11/2026 11:03",
+        )
+        self.assertEqual(arquivos["comprovante-sem-data.pdf"]["data_upload"], "")
+        self.assertEqual(
+            arquivos["comprovante.pdf"]["download_endpoint"],
+            f"/api/comprovantes/arquivos/{arquivos['comprovante.pdf']['id']}/download",
+        )
+
+        resposta_comprovante = self.client.get(
+            f"/api/motorista/minhas-viagens/{viagem_id}/comprovante",
+            headers=self.auth(token_motorista),
+        )
+        self.assert_status(resposta_comprovante, 200)
+        dados_comprovante = resposta_comprovante.get_json()
+        self.assertEqual(dados_comprovante["recebedor"], "Roberto Almeida")
+        self.assertEqual(
+            dados_comprovante["observacao"],
+            "Mercadoria recebida em perfeito estado, sem avarias ou ressalvas.",
+        )
+        self.assertEqual(dados_comprovante["data_entrega"], "01/11/2026 11:07")
+
+        resposta_outro_motorista = self.client.get(
+            f"/api/motorista/minhas-viagens/{viagem_id}/comprovantes/arquivos",
+            headers=self.auth(token_outro),
+        )
+        self.assert_status(resposta_outro_motorista, 404)
+        resposta_comprovante_nao_autorizada = self.client.get(
+            f"/api/motorista/minhas-viagens/{viagem_id}/comprovante",
+            headers=self.auth(token_outro),
+        )
+        self.assert_status(resposta_comprovante_nao_autorizada, 404)
 
     def test_dynamic_idor_and_inactive_user(self):
         with self.app.app_context():

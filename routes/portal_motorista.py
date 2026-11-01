@@ -27,7 +27,10 @@ from utils.arquivos import (
     remover_arquivo_criado,
     salvar_arquivo_upload,
 )
-from utils.datas import formatar_data_brasilia
+from utils.datas import (
+    formatar_data_brasilia,
+    formatar_instante_utc_brasilia,
+)
 from utils.constantes import (
     TRANSICOES_VIAGEM,
     opcoes_proximo_status,
@@ -361,12 +364,8 @@ def api_consultar_comprovante_motorista(id):
         "viagem_id": comprovante.viagem_id,
         "recebedor": comprovante.recebedor,
         "observacao": comprovante.observacao or "",
-        "data_entrega": (
-            comprovante.data_entrega.strftime(
-                "%d/%m/%Y %H:%M"
-            )
-            if comprovante.data_entrega
-            else ""
+        "data_entrega": formatar_instante_utc_brasilia(
+            comprovante.data_entrega
         )
     }), 200
 
@@ -572,12 +571,8 @@ def api_listar_arquivos_comprovante_motorista(id):
         lista.append({
             "id": arquivo.id,
             "nome_arquivo": arquivo.nome_arquivo,
-            "data_upload": (
-                arquivo.data_upload.strftime(
-                    "%d/%m/%Y %H:%M"
-                )
-                if arquivo.data_upload
-                else ""
+            "data_upload": formatar_instante_utc_brasilia(
+                arquivo.data_upload
             ),
             "download_endpoint": (
                 f"/api/comprovantes/arquivos/{arquivo.id}/download"
