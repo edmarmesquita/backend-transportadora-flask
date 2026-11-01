@@ -23,34 +23,48 @@ STATUS_CARGA_ATIVOS_RECURSOS = [
 STATUS_CARGA_TERMINAIS = {"Entregue", "Cancelada"}
 STATUS_VIAGEM_TERMINAIS = {"Entregue", "Finalizada", "Cancelada"}
 
+SEQUENCIA_OPERACIONAL = (
+    "Em preparação",
+    "Em coleta",
+    "Carregando",
+    "Em trânsito",
+    "Saiu para entrega",
+    "Entregue",
+)
+
+# Status auxiliares mantêm os pontos de entrada já usados pelo sistema.
+# Parada operacional conserva compatibilidade histórica: pode avançar para
+# trânsito ou saída para entrega, pois não há campo que guarde o estágio de origem.
+TRANSICOES_OPERACIONAIS = {
+    "Em preparação": {"Em coleta"},
+    "Em coleta": {"Carregando"},
+    "Carregando": {"Em trânsito"},
+    "Em trânsito": {"Saiu para entrega"},
+    "Saiu para entrega": {"Entregue"},
+}
+
+TRANSICOES_AUXILIARES = {
+    "Pendente": {"Programada", "Em preparação", "Cancelada"},
+    "Programada": {"Em preparação", "Cancelada"},
+    "Planejada": {"Em preparação", "Em coleta", "Carregando", "Em trânsito", "Cancelada"},
+    "Em andamento": {"Em coleta", "Carregando", "Em trânsito", "Parada operacional", "Saiu para entrega", "Cancelada"},
+    "Parada operacional": {"Em trânsito", "Saiu para entrega", "Cancelada"},
+}
+
 TRANSICOES_CARGA = {
-    "Pendente": {"Programada", "Em preparação"},
-    "Programada": {"Em preparação"},
-    "Em preparação": {"Carregando"},
-    "Carregando": set(),
-    "Em andamento": set(),
-    "Em coleta": set(),
-    "Em trânsito": set(),
-    "Parada operacional": set(),
-    "Saiu para entrega": set(),
+    **TRANSICOES_OPERACIONAIS,
+    **TRANSICOES_AUXILIARES,
     "Entregue": set(),
     "Cancelada": set(),
+    "Finalizada": set(),
 }
 
 TRANSICOES_VIAGEM = {
-    "Planejada": {"Em coleta", "Carregando", "Em trânsito", "Cancelada"},
-    "Em andamento": {
-        "Em coleta", "Carregando", "Em trânsito",
-        "Parada operacional", "Saiu para entrega", "Cancelada",
-    },
-    "Em coleta": {"Carregando", "Em trânsito", "Cancelada"},
-    "Carregando": {"Em trânsito", "Cancelada"},
-    "Em trânsito": {"Parada operacional", "Saiu para entrega", "Cancelada"},
-    "Parada operacional": {"Em trânsito", "Saiu para entrega", "Cancelada"},
-    "Saiu para entrega": {"Cancelada"},
+    **TRANSICOES_OPERACIONAIS,
+    **TRANSICOES_AUXILIARES,
     "Entregue": set(),
-    "Finalizada": set(),
     "Cancelada": set(),
+    "Finalizada": set(),
 }
 
 STATUS_CARGA_EXCLUSAO_PERMITIDA = {
@@ -65,3 +79,8 @@ def transicao_carga_permitida(status_atual, novo_status):
 
 def transicao_viagem_permitida(status_atual, novo_status):
     return novo_status in TRANSICOES_VIAGEM.get(status_atual, set())
+
+
+def opcoes_proximo_status(status_atual, transicoes=TRANSICOES_VIAGEM):
+    """Retorna status subsequentes autorizados pela máquina central."""
+    return set(transicoes.get(status_atual, set()))
