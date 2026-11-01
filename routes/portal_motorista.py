@@ -28,7 +28,11 @@ from utils.arquivos import (
     salvar_arquivo_upload,
 )
 from utils.datas import formatar_data_brasilia
-from utils.constantes import TRANSICOES_VIAGEM, transicao_viagem_permitida
+from utils.constantes import (
+    TRANSICOES_VIAGEM,
+    opcoes_proximo_status,
+    transicao_viagem_permitida,
+)
 
 
 portal_motorista_bp = Blueprint(
@@ -105,10 +109,7 @@ def api_atualizar_status_viagem_motorista(id):
         dados.get("status", "")
     ).strip()
 
-    status_permitidos_motorista = {
-        "Em coleta", "Carregando", "Em trânsito",
-        "Parada operacional", "Saiu para entrega",
-    }
+    status_permitidos_motorista = opcoes_proximo_status(viagem.status)
 
     if novo_status not in status_permitidos_motorista:
         return jsonify({
@@ -118,7 +119,7 @@ def api_atualizar_status_viagem_motorista(id):
             )
         }), 400
 
-    if not transicao_viagem_permitida(viagem.status, novo_status):
+    if novo_status not in status_permitidos_motorista or not transicao_viagem_permitida(viagem.status, novo_status):
         return jsonify({
             "erro": (
                 f"Transição de '{viagem.status}' para "
@@ -723,6 +724,12 @@ def api_criar_localizacao_motorista(id):
         }), 400
 
     try:
+        carga = db.session.get(
+            Rastreamento,
+            viagem.rastreamento_id
+        )
+        local_anterior = carga.local_atual if carga else None
+
         localizacao = LocalizacaoViagem(
             viagem_id=viagem.id,
             localizacao=localizacao_texto,
@@ -738,6 +745,19 @@ def api_criar_localizacao_motorista(id):
         )
 
         db.session.add(historico)
+
+        if carga:
+            carga.local_atual = localizacao_texto
+            carga.ultima_atualizacao = datetime.utcnow()
+
+            if local_anterior != localizacao_texto:
+                historico_rastreamento = HistoricoRastreamento(
+                    rastreamento_id=carga.id,
+                    status=carga.status,
+                    local=localizacao_texto,
+                    observacao=observacao
+                )
+                db.session.add(historico_rastreamento)
 
         db.session.commit()
 

@@ -6,6 +6,7 @@ from models.clientes import Cliente, ClienteUsuario
 from models.recursos import Motorista
 from models.usuarios import UsuarioSistema
 from services.auditoria import registrar_log
+from utils.datas import formatar_instante_utc_brasilia, serializar_instante_utc
 from utils.senhas import gerar_hash_senha, senha_esta_em_hash
 
 
@@ -209,13 +210,12 @@ def api_admin_usuarios():
                 "usuario": usuario.usuario,
                 "perfil": usuario.perfil,
                 "ativo": usuario.ativo,
-                "data_criacao": (
-                    usuario.data_criacao.strftime(
-                        "%d/%m/%Y %H:%M"
-                    )
-                    if usuario.data_criacao
-                    else ""
-                )
+                "data_criacao": formatar_instante_utc_brasilia(
+                    usuario.data_criacao
+                ),
+                "data_criacao_iso": serializar_instante_utc(
+                    usuario.data_criacao
+                ),
             })
 
         return jsonify(lista), 200

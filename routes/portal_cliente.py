@@ -10,7 +10,11 @@ from models.operacao import Rastreamento, Viagem
 from models.usuarios import UsuarioSistema
 from services.autorizacao_comprovantes import obter_cliente_usuario
 from services.auditoria import registrar_log
-from utils.datas import formatar_data_brasilia
+from utils.datas import (
+    formatar_data_brasilia,
+    formatar_instante_utc_brasilia,
+    serializar_instante_utc,
+)
 
 
 portal_cliente_bp = Blueprint(
@@ -94,13 +98,12 @@ def api_cliente_minhas_cargas():
                 if getattr(carga, "previsao_entrega", None)
                 else ""
             ),
-            "ultima_atualizacao": (
-                carga.ultima_atualizacao.strftime(
-                    "%d/%m/%Y %H:%M"
-                )
-                if carga.ultima_atualizacao
-                else ""
-            )
+            "ultima_atualizacao": formatar_instante_utc_brasilia(
+                carga.ultima_atualizacao
+            ),
+            "ultima_atualizacao_iso": serializar_instante_utc(
+                carga.ultima_atualizacao
+            ),
         })
 
     return jsonify(lista), 200
@@ -166,6 +169,9 @@ def api_detalhe_carga_cliente_logado(carga_id):
     "local_atual": carga.local_atual,
     "destino": carga.destino,
     "ultima_atualizacao": formatar_data_brasilia(
+        carga.ultima_atualizacao
+    ),
+    "ultima_atualizacao_iso": serializar_instante_utc(
         carga.ultima_atualizacao
     ),
     "historico": [

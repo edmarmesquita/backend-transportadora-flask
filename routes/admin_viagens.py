@@ -33,6 +33,7 @@ from utils.constantes import (
     transicao_viagem_permitida,
 )
 from utils.datas import formatar_data_brasilia
+from utils.datas import serializar_instante_utc
 
 
 admin_viagens_bp = Blueprint(
@@ -74,7 +75,7 @@ def api_admin_viagens():
             "destino": viagem.destino,
             "status": viagem.status,
             "data_criacao": formatar_data_brasilia(viagem.data_criacao),
-            "data_criacao_iso": viagem.data_criacao.isoformat() if viagem.data_criacao else None,
+            "data_criacao_iso": serializar_instante_utc(viagem.data_criacao),
         })
 
     return jsonify(lista), 200
@@ -389,7 +390,7 @@ def api_detalhe_viagem(id):
         "data_criacao": formatar_data_brasilia(
     viagem.data_criacao
 ),
-        "data_criacao_iso": viagem.data_criacao.isoformat() if viagem.data_criacao else None
+        "data_criacao_iso": serializar_instante_utc(viagem.data_criacao)
     }
 
 
@@ -1017,6 +1018,11 @@ def api_despachar_viagem():
         return jsonify({
             "erro": "Carga não encontrada."
         }), 404
+
+    if carga.status != "Carregando":
+        return jsonify({
+            "erro": "A carga precisa estar em 'Carregando' antes do despacho."
+        }), 409
 
     motorista = db.session.get(
         Motorista,

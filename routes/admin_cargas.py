@@ -25,6 +25,7 @@ from utils.constantes import (
     transicao_carga_permitida,
 )
 from utils.valores import converter_valor_brasileiro
+from utils.datas import formatar_instante_utc_brasilia, serializar_instante_utc
 
 
 admin_cargas_bp = Blueprint(
@@ -139,10 +140,11 @@ def api_admin_carga_detalhe(id):
             else ""
         ),
         "status": carga.status,
-        "ultima_atualizacao": (
-            carga.ultima_atualizacao.strftime("%d/%m/%Y %H:%M")
-            if carga.ultima_atualizacao
-            else ""
+        "ultima_atualizacao": formatar_instante_utc_brasilia(
+            carga.ultima_atualizacao
+        ),
+        "ultima_atualizacao_iso": serializar_instante_utc(
+            carga.ultima_atualizacao
         ),
         "valor_frete": carga.valor_frete,
         "status_pagamento": carga.status_pagamento,
@@ -1219,6 +1221,11 @@ def atualizar_status_carga(id):
                 f"Transição de '{carga.status}' para "
                 f"'{novo_status}' não permitida."
             )
+        }), 409
+
+    if novo_status == "Entregue":
+        return jsonify({
+            "erro": "A entrega deve ser finalizada pelo fluxo de finalização da viagem."
         }), 409
 
     viagem = Viagem.query.filter_by(

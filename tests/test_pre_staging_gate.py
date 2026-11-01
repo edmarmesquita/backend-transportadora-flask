@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,7 +41,8 @@ class PreStagingGateTest(unittest.TestCase):
         from models.auditoria import LogAcao
         from models.clientes import Cliente, ClienteUsuario
         from models.comprovantes import ArquivoComprovanteViagem
-        from models.historicos import HistoricoRastreamento
+        from models.historicos import HistoricoRastreamento, HistoricoViagem
+        from models.localizacoes import LocalizacaoViagem
         from models.operacao import Rastreamento, Viagem
         from models.recursos import Motorista, Veiculo
         from models.usuarios import UsuarioSistema
@@ -55,6 +56,8 @@ class PreStagingGateTest(unittest.TestCase):
         cls.ClienteUsuario = ClienteUsuario
         cls.ArquivoComprovanteViagem = ArquivoComprovanteViagem
         cls.HistoricoRastreamento = HistoricoRastreamento
+        cls.HistoricoViagem = HistoricoViagem
+        cls.LocalizacaoViagem = LocalizacaoViagem
         cls.Rastreamento = Rastreamento
         cls.Viagem = Viagem
         cls.Motorista = Motorista
@@ -93,6 +96,201 @@ class PreStagingGateTest(unittest.TestCase):
             response.status_code,
             status,
             response.get_json(silent=True),
+        )
+
+    def test_maquina_de_estados_operacional_canonica(self):
+        from utils.constantes import (
+            TRANSICOES_CARGA,
+            TRANSICOES_VIAGEM,
+            SEQUENCIA_OPERACIONAL,
+        )
+
+        for atual, proximo in zip(SEQUENCIA_OPERACIONAL, SEQUENCIA_OPERACIONAL[1:]):
+            self.assertIn(proximo, TRANSICOES_CARGA[atual])
+            self.assertIn(proximo, TRANSICOES_VIAGEM[atual])
+
+        for atual, salto in (
+            ("Em preparação", "Carregando"),
+            ("Em coleta", "Em trânsito"),
+            ("Carregando", "Saiu para entrega"),
+            ("Em trânsito", "Entregue"),
+        ):
+            self.assertNotIn(salto, TRANSICOES_CARGA[atual])
+            self.assertNotIn(salto, TRANSICOES_VIAGEM[atual])
+
+        self.assertIn("Em trânsito", TRANSICOES_VIAGEM["Parada operacional"])
+        self.assertIn("Saiu para entrega", TRANSICOES_VIAGEM["Parada operacional"])
+        self.assertIn("Em preparação", TRANSICOES_CARGA["Pendente"])
+        self.assertIn("Em preparação", TRANSICOES_CARGA["Programada"])
+        self.assertIn("Em trânsito", TRANSICOES_VIAGEM["Planejada"])
+
+    def test_serializacao_temporal_dos_endpoints_prioritarios(self):
+        instante_usuario = datetime(2026, 11, 1, 21, 8)
+        instante_carga = datetime(2026, 11, 1, 23, 8)
+        instante_viagem = datetime(2026, 10, 31, 11, 56)
+
+        with self.app.app_context():
+            cliente = self.Cliente(razao_social="Cliente Datas API")
+            usuario_cliente = self.UsuarioSistema(
+                nome="Cliente Datas API",
+                usuario="cliente-datas-api",
+                email="cliente-datas-api@example.invalid",
+                senha="hash-cliente",
+                perfil="cliente",
+                ativo=True,
+            )
+            usuario_alvo = self.UsuarioSistema(
+                nome="Usuario Datas API",
+                usuario="usuario-datas-api",
+                email="usuario-datas-api@example.invalid",
+                senha="hash-usuario",
+                perfil="operador",
+                ativo=True,
+                data_criacao=instante_usuario,
+            )
+            self.db.session.add_all([cliente, usuario_cliente, usuario_alvo])
+            self.db.session.flush()
+            self.db.session.add(self.ClienteUsuario(
+                cliente_id=cliente.id,
+                usuario_sistema_id=usuario_cliente.id,
+                nome=usuario_cliente.nome,
+                empresa=cliente.razao_social,
+                email=usuario_cliente.email,
+                senha="hash-cliente",
+                ativo=True,
+            ))
+            carga = self.Rastreamento(
+                codigo="GATE-DATAS-API",
+                cliente=cliente.razao_social,
+                cliente_id=cliente.id,
+                status="Em trânsito",
+                local_atual="São Paulo/SP",
+                destino="Campinas/SP",
+                ultima_atualizacao=instante_carga,
+            )
+            self.db.session.add(carga)
+            self.db.session.flush()
+            viagem = self.Viagem(
+                rastreamento_id=carga.id,
+                origem="São Paulo/SP",
+                destino="Campinas/SP",
+                status="Em trânsito",
+                data_criacao=instante_viagem,
+            )
+            self.db.session.add(viagem)
+            self.db.session.flush()
+            self.db.session.add(self.HistoricoRastreamento(
+                rastreamento_id=carga.id,
+                status="Em trânsito",
+                local="São Paulo/SP",
+                observacao="Evento com instante igual à criação da viagem.",
+                data_evento=instante_viagem,
+            ))
+            self.db.session.add(self.HistoricoViagem(
+                viagem_id=viagem.id,
+                status="DESPACHO",
+                observacao="Evento com instante igual à criação da viagem.",
+                data_evento=instante_viagem,
+            ))
+            self.db.session.commit()
+            carga_id = carga.id
+            viagem_id = viagem.id
+            token_cliente = type(self).create_access_token(
+                identity=str(usuario_cliente.id)
+            )
+
+        usuarios = self.client.get(
+            "/api/admin/usuarios",
+            headers=self.auth(),
+        )
+        self.assert_status(usuarios, 200)
+        usuario_json = next(
+            item for item in usuarios.get_json()
+            if item["usuario"] == "usuario-datas-api"
+        )
+        self.assertEqual(usuario_json["data_criacao"], "01/11/2026 18:08")
+        self.assertEqual(usuario_json["data_criacao_iso"], "2026-11-01T21:08:00Z")
+
+        carga_admin = self.client.get(
+            f"/api/admin/cargas/{carga_id}",
+            headers=self.auth(),
+        )
+        self.assert_status(carga_admin, 200)
+        carga_admin_json = carga_admin.get_json()
+        self.assertEqual(carga_admin_json["ultima_atualizacao"], "01/11/2026 20:08")
+        self.assertEqual(
+            carga_admin_json["ultima_atualizacao_iso"],
+            "2026-11-01T23:08:00Z",
+        )
+
+        cargas_cliente = self.client.get(
+            "/api/cliente/minhas-cargas",
+            headers=self.auth(token_cliente),
+        )
+        self.assert_status(cargas_cliente, 200)
+        carga_cliente_json = next(
+            item for item in cargas_cliente.get_json()
+            if item["id"] == carga_id
+        )
+        self.assertEqual(carga_cliente_json["ultima_atualizacao"], "01/11/2026 20:08")
+        self.assertEqual(
+            carga_cliente_json["ultima_atualizacao_iso"],
+            "2026-11-01T23:08:00Z",
+        )
+
+        detalhe_cliente = self.client.get(
+            f"/api/cliente/minhas-cargas/{carga_id}",
+            headers=self.auth(token_cliente),
+        )
+        self.assert_status(detalhe_cliente, 200)
+        detalhe_json = detalhe_cliente.get_json()
+        self.assertEqual(detalhe_json["ultima_atualizacao"], "01/11/2026 20:08")
+        self.assertEqual(
+            detalhe_json["ultima_atualizacao_iso"],
+            "2026-11-01T23:08:00Z",
+        )
+        self.assertEqual(
+            detalhe_json["historico"][0]["data_evento"],
+            "31/10/2026 08:56",
+        )
+
+        viagens = self.client.get(
+            "/api/admin/viagens",
+            headers=self.auth(),
+        )
+        self.assert_status(viagens, 200)
+        viagem_lista = next(
+            item for item in viagens.get_json()
+            if item["id"] == viagem_id
+        )
+        self.assertEqual(viagem_lista["data_criacao"], "31/10/2026 08:56")
+        self.assertEqual(
+            viagem_lista["data_criacao_iso"],
+            "2026-10-31T11:56:00Z",
+        )
+
+        viagem_detalhe = self.client.get(
+            f"/api/admin/viagens/{viagem_id}",
+            headers=self.auth(),
+        )
+        self.assert_status(viagem_detalhe, 200)
+        self.assertEqual(
+            viagem_detalhe.get_json()["data_criacao"],
+            viagem_lista["data_criacao"],
+        )
+        self.assertEqual(
+            viagem_detalhe.get_json()["data_criacao_iso"],
+            viagem_lista["data_criacao_iso"],
+        )
+
+        historico_viagem = self.client.get(
+            f"/api/admin/viagens/{viagem_id}/historico",
+            headers=self.auth(),
+        )
+        self.assert_status(historico_viagem, 200)
+        self.assertEqual(
+            historico_viagem.get_json()[0]["data_evento"],
+            viagem_lista["data_criacao"],
         )
 
     def test_health_saudavel_e_publico(self):
@@ -1030,6 +1228,221 @@ class PreStagingGateTest(unittest.TestCase):
             self.assertNotIn("senha-motorista", serialized)
             self.assertNotIn("JWT", serialized.upper())
             self.assertNotIn("hash", serialized.lower())
+
+    def test_motorista_localizacao_atualiza_rastreamento_e_timeline_cliente(self):
+        with self.app.app_context():
+            cliente = self.Cliente(razao_social="Cliente Localizacao Gate")
+            usuario_cliente = self.UsuarioSistema(
+                nome="Cliente Localizacao Gate",
+                usuario="cliente-localizacao-gate",
+                email="cliente-localizacao-gate@example.invalid",
+                senha="hash-cliente",
+                perfil="cliente",
+                ativo=True,
+            )
+            usuario_motorista = self.UsuarioSistema(
+                nome="Motorista Localizacao Gate",
+                usuario="motorista-localizacao-gate",
+                email="motorista-localizacao-gate@example.invalid",
+                senha="hash-motorista",
+                perfil="motorista",
+                ativo=True,
+            )
+            usuario_outro_motorista = self.UsuarioSistema(
+                nome="Outro Motorista Gate",
+                usuario="outro-motorista-localizacao-gate",
+                email="outro-motorista-localizacao-gate@example.invalid",
+                senha="hash-outro",
+                perfil="motorista",
+                ativo=True,
+            )
+            self.db.session.add_all([
+                cliente,
+                usuario_cliente,
+                usuario_motorista,
+                usuario_outro_motorista,
+            ])
+            self.db.session.flush()
+            self.db.session.add(self.ClienteUsuario(
+                cliente_id=cliente.id,
+                usuario_sistema_id=usuario_cliente.id,
+                nome=usuario_cliente.nome,
+                empresa=cliente.razao_social,
+                email=usuario_cliente.email,
+                senha="hash-cliente",
+                ativo=True,
+            ))
+            motorista = self.Motorista(
+                nome=usuario_motorista.nome,
+                usuario_sistema_id=usuario_motorista.id,
+                status="Ativo",
+            )
+            outro_motorista = self.Motorista(
+                nome=usuario_outro_motorista.nome,
+                usuario_sistema_id=usuario_outro_motorista.id,
+                status="Ativo",
+            )
+            self.db.session.add_all([motorista, outro_motorista])
+            self.db.session.flush()
+            carga = self.Rastreamento(
+                codigo="GATE-LOCALIZACAO",
+                cliente=cliente.razao_social,
+                cliente_id=cliente.id,
+                status="Em trânsito",
+                local_atual="São Paulo/SP - Centro de Distribuição",
+                destino="Campinas/SP",
+            )
+            self.db.session.add(carga)
+            self.db.session.flush()
+            viagem = self.Viagem(
+                rastreamento_id=carga.id,
+                motorista_id=motorista.id,
+                origem="São Paulo/SP - Centro de Distribuição",
+                destino="Campinas/SP",
+                status="Em andamento",
+            )
+            self.db.session.add(viagem)
+            self.db.session.flush()
+            carga.ultima_atualizacao = datetime.utcnow() - timedelta(days=1)
+            self.db.session.commit()
+
+            viagem_id = viagem.id
+            carga_id = carga.id
+            token_motorista = type(self).create_access_token(
+                identity=str(usuario_motorista.id)
+            )
+            token_outro_motorista = type(self).create_access_token(
+                identity=str(usuario_outro_motorista.id)
+            )
+            token_cliente = type(self).create_access_token(
+                identity=str(usuario_cliente.id)
+            )
+            timestamp_anterior = carga.ultima_atualizacao
+
+        payload = {
+            "localizacao": "Jundiaí/SP",
+            "observacao": "Viagem seguindo normalmente em direção a Campinas/SP.",
+            # O endpoint deve ignorar qualquer tentativa do cliente de escolher carga.
+            "rastreamento_id": -999,
+        }
+        response = self.client.post(
+            f"/api/motorista/minhas-viagens/{viagem_id}/localizacoes",
+            json=payload,
+            headers=self.auth(token_motorista),
+        )
+        self.assert_status(response, 201)
+
+        with self.app.app_context():
+            carga = self.db.session.get(self.Rastreamento, carga_id)
+            self.assertEqual(carga.local_atual, "Jundiaí/SP")
+            self.assertEqual(carga.status, "Em trânsito")
+            self.assertGreater(carga.ultima_atualizacao, timestamp_anterior)
+            self.assertEqual(
+                self.LocalizacaoViagem.query.filter_by(
+                    viagem_id=viagem_id
+                ).count(),
+                1,
+            )
+            self.assertEqual(
+                self.HistoricoViagem.query.filter_by(
+                    viagem_id=viagem_id
+                ).count(),
+                1,
+            )
+            evento = self.HistoricoRastreamento.query.filter_by(
+                rastreamento_id=carga_id
+            ).one()
+            self.assertEqual(evento.status, "Em trânsito")
+            self.assertEqual(evento.local, "Jundiaí/SP")
+            self.assertEqual(
+                evento.observacao,
+                "Viagem seguindo normalmente em direção a Campinas/SP.",
+            )
+
+        detalhe_cliente = self.client.get(
+            f"/api/cliente/minhas-cargas/{carga_id}",
+            headers=self.auth(token_cliente),
+        )
+        self.assert_status(detalhe_cliente, 200)
+        dados_cliente = detalhe_cliente.get_json()
+        self.assertEqual(dados_cliente["local_atual"], "Jundiaí/SP")
+        self.assertEqual(dados_cliente["historico"][-1]["local"], "Jundiaí/SP")
+        self.assertEqual(
+            dados_cliente["historico"][-1]["observacao"],
+            "Viagem seguindo normalmente em direção a Campinas/SP.",
+        )
+
+        timestamp_da_primeira_localizacao = dados_cliente["ultima_atualizacao"]
+        response_repetido = self.client.post(
+            f"/api/motorista/minhas-viagens/{viagem_id}/localizacoes",
+            json=payload,
+            headers=self.auth(token_motorista),
+        )
+        self.assert_status(response_repetido, 201)
+        with self.app.app_context():
+            self.assertEqual(
+                self.LocalizacaoViagem.query.filter_by(
+                    viagem_id=viagem_id
+                ).count(),
+                2,
+            )
+            self.assertEqual(
+                self.HistoricoViagem.query.filter_by(
+                    viagem_id=viagem_id
+                ).count(),
+                2,
+            )
+            self.assertEqual(
+                self.HistoricoRastreamento.query.filter_by(
+                    rastreamento_id=carga_id
+                ).count(),
+                1,
+            )
+            self.assertGreater(
+                self.db.session.get(self.Rastreamento, carga_id).ultima_atualizacao,
+                timestamp_anterior,
+            )
+
+        antes = self.client.get(
+            f"/api/cliente/minhas-cargas/{carga_id}",
+            headers=self.auth(token_cliente),
+        ).get_json()
+        with self.app.app_context():
+            localizacoes_antes_nao_autorizada = self.LocalizacaoViagem.query.filter_by(
+                viagem_id=viagem_id
+            ).count()
+            historicos_viagem_antes_nao_autorizada = self.HistoricoViagem.query.filter_by(
+                viagem_id=viagem_id
+            ).count()
+        response_nao_autorizada = self.client.post(
+            f"/api/motorista/minhas-viagens/{viagem_id}/localizacoes",
+            json={"localizacao": "Sorocaba/SP", "observacao": "Não autorizado."},
+            headers=self.auth(token_outro_motorista),
+        )
+        self.assert_status(response_nao_autorizada, 404)
+        depois = self.client.get(
+            f"/api/cliente/minhas-cargas/{carga_id}",
+            headers=self.auth(token_cliente),
+        ).get_json()
+        self.assertEqual(depois["local_atual"], antes["local_atual"])
+        self.assertEqual(depois["historico"], antes["historico"])
+        self.assertEqual(
+            depois["ultima_atualizacao"],
+            timestamp_da_primeira_localizacao,
+        )
+        with self.app.app_context():
+            self.assertEqual(
+                self.LocalizacaoViagem.query.filter_by(
+                    viagem_id=viagem_id
+                ).count(),
+                localizacoes_antes_nao_autorizada,
+            )
+            self.assertEqual(
+                self.HistoricoViagem.query.filter_by(
+                    viagem_id=viagem_id
+                ).count(),
+                historicos_viagem_antes_nao_autorizada,
+            )
 
     def test_dynamic_idor_and_inactive_user(self):
         with self.app.app_context():
