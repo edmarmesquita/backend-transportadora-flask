@@ -2,6 +2,10 @@ import os
 from datetime import timedelta
 
 from sqlalchemy.engine import make_url
+from utils.ambiente_local import carregar_dotenv_local
+
+
+carregar_dotenv_local()
 
 
 def _obter_booleano_ambiente(nome, padrao=False):
