@@ -28,6 +28,10 @@ class Rastreamento(db.Model):
     status_pagamento = db.Column(db.String(30), default="Pendente")
     local_atual = db.Column(db.String(100), nullable=False)
     destino = db.Column(db.String(100), nullable=False)
+    descricao_carga = db.Column(db.Text, nullable=True)
+    peso_kg = db.Column(db.Float, nullable=True)
+    # Planejamento usa horario operacional local, sem conversao UTC.
+    data_prevista_saida = db.Column(db.DateTime, nullable=True)
     previsao_entrega = db.Column(db.DateTime, nullable=True)
     ultima_atualizacao = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -49,6 +53,7 @@ class Viagem(db.Model):
     destino = db.Column(db.String(120), nullable=False)
     status = db.Column(db.String(30), default="Planejada")
 
+    # Saida efetiva da execucao; nao representa o agendamento da carga.
     data_saida = db.Column(db.DateTime, nullable=True)
     previsao_entrega = db.Column(db.DateTime, nullable=True)
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)

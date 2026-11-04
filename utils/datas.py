@@ -6,6 +6,41 @@ UTC = timezone.utc
 FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
 
 
+
+def analisar_data_operacional_local(valor):
+    """Parse datetime-local como horario Sao Paulo sem deslocamento UTC."""
+    if valor in (None, ""):
+        return None
+    if not isinstance(valor, str):
+        raise TypeError("valor deve ser uma string ISO local ou None")
+    data = datetime.fromisoformat(valor)
+    if data.tzinfo is not None and data.utcoffset() is not None:
+        return data.astimezone(FUSO_BRASILIA).replace(tzinfo=None)
+    return data
+
+
+def formatar_data_operacional_local(data):
+    """Formatar data planejada para datetime-local sem conversao UTC."""
+    if data is None:
+        return ""
+    if not isinstance(data, datetime):
+        raise TypeError("data deve ser um datetime ou None")
+    if data.tzinfo is not None and data.utcoffset() is not None:
+        data = data.astimezone(FUSO_BRASILIA).replace(tzinfo=None)
+    return data.strftime("%Y-%m-%dT%H:%M")
+
+
+def exibir_data_operacional_local(data):
+    """Exibir data planejada como horario local operacional."""
+    if data is None:
+        return ""
+    if not isinstance(data, datetime):
+        raise TypeError("data deve ser um datetime ou None")
+    if data.tzinfo is not None and data.utcoffset() is not None:
+        data = data.astimezone(FUSO_BRASILIA).replace(tzinfo=None)
+    return data.strftime("%d/%m/%Y %H:%M")
+
+
 def instante_atual_utc():
     """Retorna o instante atual como datetime aware em UTC."""
     return datetime.now(UTC)

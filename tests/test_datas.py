@@ -6,6 +6,9 @@ from utils.datas import (
     formatar_instante_utc_brasilia,
     instante_atual_utc,
     serializar_instante_utc,
+    analisar_data_operacional_local,
+    formatar_data_operacional_local,
+    exibir_data_operacional_local,
 )
 
 
@@ -63,6 +66,21 @@ class DatasTest(unittest.TestCase):
 
         self.assertEqual(formatar_data_brasilia(valor), "31/10/2026 08:56")
         self.assertEqual(formatar_data_brasilia(None), "")
+
+
+    def test_data_operacional_local_nao_sofre_deslocamento_utc(self):
+        valor = analisar_data_operacional_local("2026-11-05T17:30")
+        self.assertEqual(valor, datetime(2026, 11, 5, 17, 30))
+        self.assertEqual(formatar_data_operacional_local(valor), "2026-11-05T17:30")
+        self.assertEqual(exibir_data_operacional_local(valor), "05/11/2026 17:30")
+
+    def test_data_operacional_com_offset_normaliza_para_fuso_operacional(self):
+        valor = analisar_data_operacional_local("2026-11-05T20:30:00+00:00")
+        self.assertEqual(valor, datetime(2026, 11, 5, 17, 30))
+
+    def test_data_operacional_vazia_permanece_nula(self):
+        self.assertIsNone(analisar_data_operacional_local(""))
+        self.assertEqual(exibir_data_operacional_local(None), "")
 
 
 if __name__ == "__main__":

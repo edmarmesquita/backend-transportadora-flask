@@ -32,8 +32,16 @@ from utils.constantes import (
     TRANSICOES_VIAGEM,
     transicao_viagem_permitida,
 )
-from utils.datas import formatar_data_brasilia
-from utils.datas import serializar_instante_utc
+from utils.datas import (
+    FUSO_BRASILIA,
+    analisar_data_operacional_local,
+    exibir_data_operacional_local,
+    formatar_data_brasilia,
+    formatar_data_operacional_local,
+    formatar_instante_utc_brasilia,
+    instante_atual_utc,
+    serializar_instante_utc,
+)
 
 
 admin_viagens_bp = Blueprint(
@@ -263,6 +271,18 @@ def api_atualizar_status_viagem(id):
         }), 409
 
     try:
+        iniciou_execucao = (
+            status_atual == "planejada"
+            and novo_status == "Em trânsito"
+        )
+        if iniciou_execucao:
+            if viagem.data_saida is None:
+                # Instante real em UTC naive, conforme convencao tecnica legada.
+                viagem.data_saida = instante_atual_utc().replace(tzinfo=None)
+            if viagem.previsao_entrega is None and carga:
+                # Copia o valor planejado local sem conversao ou deslocamento.
+                viagem.previsao_entrega = carga.previsao_entrega
+
         viagem.status = novo_status
 
         # Mantém carga e viagem sincronizadas.
@@ -387,6 +407,10 @@ def api_detalhe_viagem(id):
         "origem": viagem.origem,
         "destino": viagem.destino,
         "status": viagem.status,
+        "data_saida": formatar_instante_utc_brasilia(viagem.data_saida),
+        "data_saida_iso": serializar_instante_utc(viagem.data_saida),
+        "previsao_entrega": exibir_data_operacional_local(viagem.previsao_entrega),
+        "previsao_entrega_local": formatar_data_operacional_local(viagem.previsao_entrega),
         "data_criacao": formatar_data_brasilia(
     viagem.data_criacao
 ),
@@ -1108,9 +1132,9 @@ def api_despachar_viagem():
         )
 
         previsao_entrega = (
-            datetime.fromisoformat(previsao_entrega_texto)
+            analisar_data_operacional_local(previsao_entrega_texto)
             if previsao_entrega_texto
-            else None
+            else carga.previsao_entrega
         )
 
     except ValueError:
@@ -1118,7 +1142,13 @@ def api_despachar_viagem():
             "erro": "Uma das datas informadas é inválida."
         }), 400
 
-    if previsao_entrega and previsao_entrega < data_saida:
+    if data_saida.tzinfo is None or data_saida.utcoffset() is None:
+        data_saida_local = data_saida.replace(tzinfo=FUSO_BRASILIA)
+    else:
+        data_saida_local = data_saida.astimezone(FUSO_BRASILIA)
+    data_saida_local = data_saida_local.replace(tzinfo=None)
+
+    if previsao_entrega and previsao_entrega < data_saida_local:
         return jsonify({
             "erro": "A previsão de entrega não pode ser anterior à saída."
         }), 400

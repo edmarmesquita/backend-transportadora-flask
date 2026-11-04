@@ -75,6 +75,18 @@ def adicionar_colunas_operacionais():
                 "ADD COLUMN previsao_entrega DATETIME"
             )
 
+        novas_colunas_planejamento = {
+            "descricao_carga": "TEXT",
+            "peso_kg": "REAL",
+            "data_prevista_saida": "DATETIME",
+        }
+        for nome_coluna, tipo_coluna in novas_colunas_planejamento.items():
+            if nome_coluna not in colunas_rastreamento:
+                cursor.execute(
+                    f"ALTER TABLE rastreamento "
+                    f"ADD COLUMN {nome_coluna} {tipo_coluna}"
+                )
+
         if "destino_latitude" not in colunas_rastreamento:
             cursor.execute(
                 "ALTER TABLE rastreamento "

@@ -125,6 +125,99 @@ class PreStagingGateTest(unittest.TestCase):
         self.assertIn("Em preparação", TRANSICOES_CARGA["Programada"])
         self.assertIn("Em trânsito", TRANSICOES_VIAGEM["Planejada"])
 
+    def test_iniciar_viagem_registra_execucao_e_preserva_planejamento(self):
+        from datetime import timezone
+
+        planejada_saida = datetime(2026, 11, 4, 8, 0)
+        planejada_entrega = datetime(2026, 11, 4, 14, 30)
+        partida_utc = datetime(2026, 11, 4, 12, 0, tzinfo=timezone.utc)
+        entrega_existente = datetime(2026, 11, 5, 19, 45)
+        partida_existente = datetime(2026, 11, 4, 10, 15)
+
+        with self.app.app_context():
+            cliente = self.Cliente(razao_social="Cliente inicio de viagem")
+            self.db.session.add(cliente)
+            self.db.session.flush()
+
+            carga_nova = self.Rastreamento(
+                codigo="GATE-INICIAR-NOVO",
+                cliente=cliente.razao_social,
+                cliente_id=cliente.id,
+                status="Planejada",
+                local_atual="Sao Paulo/SP",
+                destino="Campinas/SP",
+                data_prevista_saida=planejada_saida,
+                previsao_entrega=planejada_entrega,
+            )
+            carga_existente = self.Rastreamento(
+                codigo="GATE-INICIAR-PREENCHIDO",
+                cliente=cliente.razao_social,
+                cliente_id=cliente.id,
+                status="Planejada",
+                local_atual="Sao Paulo/SP",
+                destino="Santos/SP",
+                data_prevista_saida=datetime(2026, 11, 4, 7, 0),
+                previsao_entrega=datetime(2026, 11, 6, 9, 0),
+            )
+            self.db.session.add_all([carga_nova, carga_existente])
+            self.db.session.flush()
+
+            viagem_nova = self.Viagem(
+                rastreamento_id=carga_nova.id,
+                origem="Sao Paulo/SP",
+                destino="Campinas/SP",
+                status="Planejada",
+                data_saida=None,
+                previsao_entrega=None,
+            )
+            viagem_existente = self.Viagem(
+                rastreamento_id=carga_existente.id,
+                origem="Sao Paulo/SP",
+                destino="Santos/SP",
+                status="Planejada",
+                data_saida=partida_existente,
+                previsao_entrega=entrega_existente,
+            )
+            self.db.session.add_all([viagem_nova, viagem_existente])
+            self.db.session.commit()
+            ids = (viagem_nova.id, viagem_existente.id)
+
+        with patch(
+            "routes.admin_viagens.instante_atual_utc",
+            return_value=partida_utc,
+        ):
+            for viagem_id in ids:
+                response = self.client.post(
+                    f"/api/admin/viagens/{viagem_id}/status",
+                    json={"status": "Em tr\u00e2nsito"},
+                    headers=self.auth(),
+                )
+                self.assert_status(response, 200)
+
+        detalhe = self.client.get(
+            f"/api/admin/viagens/{ids[0]}",
+            headers=self.auth(),
+        )
+        self.assert_status(detalhe, 200)
+        self.assertEqual(detalhe.get_json()["data_saida_iso"], "2026-11-04T12:00:00Z")
+        self.assertEqual(detalhe.get_json()["data_saida"], "04/11/2026 09:00")
+        self.assertEqual(detalhe.get_json()["previsao_entrega"], "04/11/2026 14:30")
+        self.assertEqual(detalhe.get_json()["previsao_entrega_local"], "2026-11-04T14:30")
+
+        with self.app.app_context():
+            primeira = self.db.session.get(self.Viagem, ids[0])
+            primeira_carga = self.db.session.get(
+                self.Rastreamento, primeira.rastreamento_id
+            )
+            segunda = self.db.session.get(self.Viagem, ids[1])
+            self.assertEqual(primeira.status, "Em tr\u00e2nsito")
+            self.assertEqual(primeira_carga.status, "Em tr\u00e2nsito")
+            self.assertEqual(primeira.data_saida, datetime(2026, 11, 4, 12, 0))
+            self.assertEqual(primeira.previsao_entrega, planejada_entrega)
+            self.assertNotEqual(primeira.data_saida, planejada_saida)
+            self.assertEqual(segunda.data_saida, partida_existente)
+            self.assertEqual(segunda.previsao_entrega, entrega_existente)
+
     def test_serializacao_temporal_dos_endpoints_prioritarios(self):
         instante_usuario = datetime(2026, 11, 1, 21, 8)
         instante_carga = datetime(2026, 11, 1, 23, 8)
@@ -169,6 +262,8 @@ class PreStagingGateTest(unittest.TestCase):
                 destino="Campinas/SP",
                 ultima_atualizacao=instante_carga,
             )
+            carga.data_prevista_saida = datetime(2026, 11, 5, 17, 30)
+            carga.previsao_entrega = datetime(2026, 11, 6, 9, 15)
             self.db.session.add(carga)
             self.db.session.flush()
             viagem = self.Viagem(
@@ -218,6 +313,8 @@ class PreStagingGateTest(unittest.TestCase):
         )
         self.assert_status(carga_admin, 200)
         carga_admin_json = carga_admin.get_json()
+        self.assertEqual(carga_admin_json["data_prevista_saida"], "05/11/2026 17:30")
+        self.assertEqual(carga_admin_json["previsao_entrega"], "06/11/2026 09:15")
         self.assertEqual(carga_admin_json["ultima_atualizacao"], "01/11/2026 20:08")
         self.assertEqual(
             carga_admin_json["ultima_atualizacao_iso"],
@@ -254,6 +351,14 @@ class PreStagingGateTest(unittest.TestCase):
             detalhe_json["historico"][0]["data_evento"],
             "31/10/2026 08:56",
         )
+        self.assertEqual(detalhe_json["descricao_carga"], None)
+        self.assertEqual(detalhe_json["peso_kg"], None)
+        self.assertEqual(detalhe_json["data_prevista_saida"], "05/11/2026 17:30")
+        self.assertEqual(detalhe_json["previsao_entrega"], "06/11/2026 09:15")
+        self.assertEqual(detalhe_json["descricao_carga"], None)
+        self.assertEqual(detalhe_json["peso_kg"], None)
+        self.assertEqual(detalhe_json["data_prevista_saida"], "05/11/2026 17:30")
+        self.assertEqual(detalhe_json["previsao_entrega"], "06/11/2026 09:15")
 
         viagens = self.client.get(
             "/api/admin/viagens",
@@ -1954,6 +2059,68 @@ class PreStagingGateTest(unittest.TestCase):
         })
         self.assertNotIn("Traceback", response.get_data(as_text=True))
         self.assertNotIn("secret", response.get_data(as_text=True).lower())
+
+    def test_campos_planejados_de_carga_e_validacao_de_peso(self):
+        created = self.client.post(
+            "/api/admin/cargas",
+            json={
+                "cliente": "Cliente Planejamento",
+                "status": "Pendente",
+                "local_atual": "Origem",
+                "destino": "Destino",
+                "descricao_carga": "Alimentos embalados",
+                "peso_kg": 125.5,
+                "data_prevista_saida": "2026-11-05T17:30",
+                "previsao_entrega": "2026-11-06T09:15",
+            },
+            headers=self.auth(),
+        )
+        self.assert_status(created, 201)
+        carga_id = created.get_json()["id"]
+        detail = self.client.get(f"/api/admin/cargas/{carga_id}", headers=self.auth())
+        self.assert_status(detail, 200)
+        data = detail.get_json()
+        listing = self.client.get("/api/admin/cargas", headers=self.auth())
+        self.assert_status(listing, 200)
+        listed = next(row for row in listing.get_json() if row["id"] == carga_id)
+        self.assertEqual(listed["peso_kg"], 125.5)
+        self.assertEqual(listed["data_prevista_saida"], "05/11/2026 17:30")
+        self.assertEqual(data["descricao_carga"], "Alimentos embalados")
+        self.assertEqual(data["peso_kg"], 125.5)
+        self.assertEqual(data["data_prevista_saida"], "05/11/2026 17:30")
+        self.assertEqual(data["data_prevista_saida_local"], "2026-11-05T17:30")
+        self.assertEqual(data["previsao_entrega"], "06/11/2026 09:15")
+        with self.app.app_context():
+            carga = self.db.session.get(self.Rastreamento, carga_id)
+            self.assertEqual(carga.data_prevista_saida, datetime(2026, 11, 5, 17, 30))
+            self.assertEqual(carga.previsao_entrega, datetime(2026, 11, 6, 9, 15))
+
+        updated = self.client.put(
+            f"/api/admin/cargas/{carga_id}",
+            json={"cliente": "Cliente Planejamento", "local_atual": "Origem", "destino": "Destino", "descricao_carga": "Carga atualizada", "peso_kg": "125.75", "data_prevista_saida": "2026-11-05T18:00", "previsao_entrega": "2026-11-06T10:00"},
+            headers=self.auth(),
+        )
+        self.assert_status(updated, 200)
+        detail = self.client.get(f"/api/admin/cargas/{carga_id}", headers=self.auth())
+        self.assertEqual(detail.get_json()["peso_kg"], 125.75)
+        self.assertEqual(detail.get_json()["data_prevista_saida"], "05/11/2026 18:00")
+
+        negative = self.client.post(
+            "/api/admin/cargas",
+            json={"cliente": "Cliente Peso", "status": "Pendente", "local_atual": "A", "destino": "B", "peso_kg": -1},
+            headers=self.auth(),
+        )
+        self.assert_status(negative, 400)
+
+        old_payload = self.client.post(
+            "/api/admin/cargas",
+            json={"cliente": "Cliente Legado", "status": "Pendente", "local_atual": "A", "destino": "B"},
+            headers=self.auth(),
+        )
+        self.assert_status(old_payload, 201)
+        old_detail = self.client.get(f"/api/admin/cargas/{old_payload.get_json()['id']}", headers=self.auth())
+        self.assertIsNone(old_detail.get_json()["peso_kg"])
+        self.assertEqual(old_detail.get_json()["previsao_entrega"], "")
 
     def test_tracking_minimal_contract_and_proxy(self):
         with self.app.app_context():

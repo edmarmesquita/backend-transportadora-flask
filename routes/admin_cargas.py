@@ -25,7 +25,48 @@ from utils.constantes import (
     transicao_carga_permitida,
 )
 from utils.valores import converter_valor_brasileiro
-from utils.datas import formatar_instante_utc_brasilia, serializar_instante_utc
+from utils.datas import (
+    formatar_instante_utc_brasilia, serializar_instante_utc,
+    analisar_data_operacional_local, formatar_data_operacional_local,
+    exibir_data_operacional_local,
+)
+
+
+def ler_campos_planejamento(dados):
+    """Validate optional planning fields without breaking older API clients."""
+    resultado = {}
+    if "descricao_carga" in dados:
+        valor = dados.get("descricao_carga")
+        resultado["descricao_carga"] = str(valor).strip() if valor not in (None, "") else None
+    if "peso_kg" in dados:
+        valor = dados.get("peso_kg")
+        if valor in (None, ""):
+            resultado["peso_kg"] = None
+        else:
+            try:
+                resultado["peso_kg"] = float(valor)
+            except (TypeError, ValueError):
+                raise ValueError("Informe um peso em kg valido.")
+            if resultado["peso_kg"] < 0:
+                raise ValueError("O peso da carga nao pode ser negativo.")
+    for campo in ("data_prevista_saida", "previsao_entrega"):
+        if campo in dados:
+            try:
+                resultado[campo] = analisar_data_operacional_local(dados.get(campo))
+            except (TypeError, ValueError):
+                raise ValueError(f"Informe uma data valida para {campo}.")
+    return resultado
+
+
+def representar_planejamento(carga):
+    return {
+        "descricao_carga": carga.descricao_carga,
+        "peso_kg": carga.peso_kg,
+        "data_prevista_saida": exibir_data_operacional_local(carga.data_prevista_saida),
+        "data_prevista_saida_local": formatar_data_operacional_local(carga.data_prevista_saida),
+        "previsao_entrega": exibir_data_operacional_local(carga.previsao_entrega),
+        "previsao_entrega_local": formatar_data_operacional_local(carga.previsao_entrega),
+    }
 
 
 admin_cargas_bp = Blueprint(
@@ -76,6 +117,7 @@ def api_admin_cargas():
             "status": carga.status,
             "local_atual": carga.local_atual,
             "destino": carga.destino,
+            **representar_planejamento(carga),
             "motorista": carga.motorista_relacao.nome if carga.motorista_relacao else "",
             "veiculo": carga.veiculo_relacao.placa if carga.veiculo_relacao else "",
         })
@@ -127,6 +169,7 @@ def api_admin_carga_detalhe(id):
         "cliente_id": carga.cliente_id,
         "local_atual": carga.local_atual,
         "destino": carga.destino,
+        **representar_planejamento(carga),
         "motorista_id": carga.motorista_id,
         "motorista": (
             carga.motorista_relacao.nome
@@ -175,7 +218,11 @@ def api_criar_carga():
             "erro": "Você não possui permissão para criar cargas."
         }), 403
 
-    dados = request.get_json()
+    dados = request.get_json() or {}
+    try:
+        planejamento = ler_campos_planejamento(dados)
+    except ValueError as erro:
+        return jsonify({"erro": str(erro)}), 400
 
     codigo = gerar_codigo_rastreamento()
     cliente_id_recebido = dados.get("cliente_id")
@@ -231,6 +278,8 @@ def api_criar_carga():
     dados.get("valor_frete")
 )
     nova_carga.status_pagamento = dados.get("status_pagamento", "Pendente")
+    for campo, valor in planejamento.items():
+        setattr(nova_carga, campo, valor)
 
     db.session.add(nova_carga)
     db.session.flush()
@@ -251,7 +300,9 @@ def api_criar_carga():
         entidade_id=nova_carga.id,
         depois=snapshot_objeto(nova_carga, [
             "codigo", "cliente", "cliente_id", "status", "local_atual",
-            "destino", "valor_frete", "status_pagamento"
+            "destino", "valor_frete", "status_pagamento",
+            "descricao_carga", "peso_kg", "data_prevista_saida",
+            "previsao_entrega"
         ]),
         usuario_id=usuario.id,
         usuario_nome=usuario.nome,
@@ -292,9 +343,15 @@ def api_editar_carga(id):
     antes = snapshot_objeto(carga, [
         "codigo", "cliente", "cliente_id", "status", "local_atual",
         "destino", "valor_frete", "status_pagamento", "motorista_id",
+        "descricao_carga", "peso_kg", "data_prevista_saida",
+        "previsao_entrega",
         "veiculo_id"
     ])
     dados = request.get_json() or {}
+    try:
+        planejamento = ler_campos_planejamento(dados)
+    except ValueError as erro:
+        return jsonify({"erro": str(erro)}), 400
 
     cliente_id_recebido = dados.get("cliente_id")
 
@@ -350,6 +407,8 @@ def api_editar_carga(id):
         "status_pagamento",
         "Pendente"
     )
+    for campo, valor in planejamento.items():
+        setattr(carga, campo, valor)
 
     # Descobre se houve alteração relevante para a timeline
     local_mudou = local_anterior != carga.local_atual
@@ -377,7 +436,8 @@ def api_editar_carga(id):
         depois=snapshot_objeto(carga, [
             "codigo", "cliente", "cliente_id", "status", "local_atual",
             "destino", "valor_frete", "status_pagamento", "motorista_id",
-            "veiculo_id"
+            "veiculo_id", "descricao_carga", "peso_kg",
+            "data_prevista_saida", "previsao_entrega"
         ]),
         usuario_id=usuario.id,
         usuario_nome=usuario.nome,

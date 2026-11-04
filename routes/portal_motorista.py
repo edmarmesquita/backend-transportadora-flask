@@ -28,6 +28,7 @@ from utils.arquivos import (
     salvar_arquivo_upload,
 )
 from utils.datas import (
+    exibir_data_operacional_local,
     formatar_data_brasilia,
     formatar_instante_utc_brasilia,
 )
@@ -1094,19 +1095,11 @@ def api_motorista_minhas_viagens():
             "origem": viagem.origem,
             "destino": viagem.destino,
             "status": viagem.status,
-            "data_saida": (
-                viagem.data_saida.strftime(
-                    "%d/%m/%Y %H:%M"
-                )
-                if viagem.data_saida
-                else ""
+            "data_saida": formatar_instante_utc_brasilia(
+                viagem.data_saida
             ),
-            "previsao_entrega": (
-                viagem.previsao_entrega.strftime(
-                    "%d/%m/%Y %H:%M"
-                )
-                if viagem.previsao_entrega
-                else ""
+            "previsao_entrega": exibir_data_operacional_local(
+                viagem.previsao_entrega
             ),
             "carga_codigo": (
                 viagem.carga.codigo

@@ -14,6 +14,7 @@ from utils.datas import (
     formatar_data_brasilia,
     formatar_instante_utc_brasilia,
     serializar_instante_utc,
+    exibir_data_operacional_local,
 )
 
 
@@ -91,6 +92,9 @@ def api_cliente_minhas_cargas():
             ),
             "local_atual": carga.local_atual or "",
             "destino": carga.destino or "",
+            "descricao_carga": carga.descricao_carga,
+            "peso_kg": carga.peso_kg,
+            "data_prevista_saida": exibir_data_operacional_local(carga.data_prevista_saida),
             "previsao_entrega": (
                 carga.previsao_entrega.strftime(
                     "%d/%m/%Y %H:%M"
@@ -168,6 +172,10 @@ def api_detalhe_carga_cliente_logado(carga_id):
     "status": carga.status,
     "local_atual": carga.local_atual,
     "destino": carga.destino,
+    "descricao_carga": carga.descricao_carga,
+    "peso_kg": carga.peso_kg,
+    "data_prevista_saida": exibir_data_operacional_local(carga.data_prevista_saida),
+    "previsao_entrega": exibir_data_operacional_local(carga.previsao_entrega),
     "ultima_atualizacao": formatar_data_brasilia(
         carga.ultima_atualizacao
     ),
