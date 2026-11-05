@@ -24,6 +24,21 @@ portal_cliente_bp = Blueprint(
 )
 
 
+def dados_acompanhamento_cliente(carga):
+    viagem = Viagem.query.filter_by(
+        rastreamento_id=carga.id
+    ).first()
+
+    return {
+        "origem": viagem.origem if viagem and viagem.origem else "",
+        "previsao_entrega": (
+            viagem.previsao_entrega
+            if viagem and viagem.previsao_entrega is not None
+            else carga.previsao_entrega
+        ),
+    }
+
+
 @portal_cliente_bp.route(
     "/api/cliente/minhas-cargas",
     methods=["GET"]
@@ -80,26 +95,23 @@ def api_cliente_minhas_cargas():
     lista = []
 
     for carga in cargas:
+        acompanhamento = dados_acompanhamento_cliente(carga)
         lista.append({
             "id": carga.id,
             "codigo": carga.codigo,
             "cliente": carga.cliente,
             "status": carga.status,
-            "origem": getattr(
-                carga,
-                "origem",
-                carga.local_atual or ""
-            ),
+            "origem": acompanhamento["origem"],
             "local_atual": carga.local_atual or "",
             "destino": carga.destino or "",
             "descricao_carga": carga.descricao_carga,
             "peso_kg": carga.peso_kg,
             "data_prevista_saida": exibir_data_operacional_local(carga.data_prevista_saida),
             "previsao_entrega": (
-                carga.previsao_entrega.strftime(
+                acompanhamento["previsao_entrega"].strftime(
                     "%d/%m/%Y %H:%M"
                 )
-                if getattr(carga, "previsao_entrega", None)
+                if acompanhamento["previsao_entrega"] is not None
                 else ""
             ),
             "ultima_atualizacao": formatar_instante_utc_brasilia(
@@ -158,6 +170,7 @@ def api_detalhe_carga_cliente_logado(carga_id):
             "erro": "Carga não encontrada ou não pertence a este cliente."
         }, 404
 
+    acompanhamento = dados_acompanhamento_cliente(carga)
 
     historico = HistoricoRastreamento.query.filter_by(
         rastreamento_id=carga.id
@@ -170,12 +183,15 @@ def api_detalhe_carga_cliente_logado(carga_id):
     "codigo": carga.codigo,
     "cliente": carga.cliente,
     "status": carga.status,
+    "origem": acompanhamento["origem"],
     "local_atual": carga.local_atual,
     "destino": carga.destino,
     "descricao_carga": carga.descricao_carga,
     "peso_kg": carga.peso_kg,
     "data_prevista_saida": exibir_data_operacional_local(carga.data_prevista_saida),
-    "previsao_entrega": exibir_data_operacional_local(carga.previsao_entrega),
+    "previsao_entrega": exibir_data_operacional_local(
+        acompanhamento["previsao_entrega"]
+    ),
     "ultima_atualizacao": formatar_data_brasilia(
         carga.ultima_atualizacao
     ),

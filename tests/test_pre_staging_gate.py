@@ -43,6 +43,7 @@ class PreStagingGateTest(unittest.TestCase):
         from models.comprovantes import ArquivoComprovanteViagem, ComprovanteEntrega
         from models.historicos import HistoricoRastreamento, HistoricoViagem
         from models.localizacoes import LocalizacaoViagem
+        from models.ocorrencias import OcorrenciaEntrega
         from models.operacao import Rastreamento, Viagem
         from models.recursos import Motorista, Veiculo
         from models.usuarios import UsuarioSistema
@@ -58,6 +59,7 @@ class PreStagingGateTest(unittest.TestCase):
         cls.ComprovanteEntrega = ComprovanteEntrega
         cls.HistoricoRastreamento = HistoricoRastreamento
         cls.HistoricoViagem = HistoricoViagem
+        cls.OcorrenciaEntrega = OcorrenciaEntrega
         cls.LocalizacaoViagem = LocalizacaoViagem
         cls.Rastreamento = Rastreamento
         cls.Viagem = Viagem
@@ -1873,6 +1875,246 @@ class PreStagingGateTest(unittest.TestCase):
             headers=self.auth(token_outro),
         )
         self.assert_status(resposta_comprovante_nao_autorizada, 404)
+
+    def test_cliente_origem_previsao_alinhadas_e_carga_sem_viagem(self):
+        with self.app.app_context():
+            cliente = self.Cliente(razao_social="Cliente contrato 2")
+            usuario = self.UsuarioSistema(
+                nome="Cliente contrato 2",
+                usuario="cliente-contrato-2",
+                email="cliente-contrato-2@example.invalid",
+                senha="hash-cliente",
+                perfil="cliente",
+                ativo=True,
+            )
+            self.db.session.add_all([cliente, usuario])
+            self.db.session.flush()
+            self.db.session.add(self.ClienteUsuario(
+                cliente_id=cliente.id,
+                usuario_sistema_id=usuario.id,
+                nome=usuario.nome,
+                empresa=cliente.razao_social,
+                email=usuario.email,
+                senha="hash-cliente",
+                ativo=True,
+            ))
+            carga_com_viagem = self.Rastreamento(
+                codigo="CLIENTE-ORIGEM-PREVISAO",
+                cliente=cliente.razao_social,
+                cliente_id=cliente.id,
+                status="Em trânsito",
+                local_atual="Taubaté/SP",
+                destino="São José dos Campos/SP",
+                data_prevista_saida=datetime(2026, 11, 5, 7, 30),
+                previsao_entrega=datetime(2026, 11, 5, 12, 30),
+            )
+            carga_sem_viagem = self.Rastreamento(
+                codigo="CLIENTE-SEM-VIAGEM",
+                cliente=cliente.razao_social,
+                cliente_id=cliente.id,
+                status="Pendente",
+                local_atual="São Paulo/SP",
+                destino="Campinas/SP",
+                previsao_entrega=datetime(2026, 11, 5, 12, 30),
+            )
+            self.db.session.add_all([carga_com_viagem, carga_sem_viagem])
+            self.db.session.flush()
+            viagem = self.Viagem(
+                rastreamento_id=carga_com_viagem.id,
+                origem="São Paulo/SP",
+                destino="São José dos Campos/SP",
+                status="Em trânsito",
+                previsao_entrega=datetime(2026, 11, 5, 14, 45),
+            )
+            self.db.session.add(viagem)
+            self.db.session.commit()
+            carga_id = carga_com_viagem.id
+            carga_sem_viagem_id = carga_sem_viagem.id
+            viagem_id = viagem.id
+            token = type(self).create_access_token(identity=str(usuario.id))
+
+        headers = self.auth(token)
+        lista = self.client.get("/api/cliente/minhas-cargas", headers=headers)
+        self.assert_status(lista, 200)
+        cargas = {item["id"]: item for item in lista.get_json()}
+        carga_json = cargas[carga_id]
+        self.assertEqual(carga_json["origem"], "São Paulo/SP")
+        self.assertEqual(carga_json["local_atual"], "Taubaté/SP")
+        self.assertEqual(carga_json["previsao_entrega"], "05/11/2026 14:45")
+        self.assertEqual(carga_json["data_prevista_saida"], "05/11/2026 07:30")
+        self.assertTrue({
+            "id", "codigo", "cliente", "status", "origem", "local_atual",
+            "destino", "descricao_carga", "peso_kg", "data_prevista_saida",
+            "previsao_entrega", "ultima_atualizacao", "ultima_atualizacao_iso",
+        }.issubset(carga_json))
+
+        detalhe = self.client.get(
+            f"/api/cliente/minhas-cargas/{carga_id}", headers=headers
+        )
+        self.assert_status(detalhe, 200)
+        detalhe_json = detalhe.get_json()
+        self.assertEqual(detalhe_json["origem"], "São Paulo/SP")
+        self.assertEqual(detalhe_json["local_atual"], "Taubaté/SP")
+        self.assertEqual(detalhe_json["previsao_entrega"], "05/11/2026 14:45")
+        self.assertEqual(
+            detalhe_json["data_prevista_saida"],
+            "05/11/2026 07:30",
+        )
+
+        with self.app.app_context():
+            viagem = self.db.session.get(self.Viagem, viagem_id)
+            viagem.previsao_entrega = None
+            self.db.session.commit()
+        for resposta in (
+            self.client.get("/api/cliente/minhas-cargas", headers=headers),
+            self.client.get(
+                f"/api/cliente/minhas-cargas/{carga_id}", headers=headers
+            ),
+        ):
+            self.assert_status(resposta, 200)
+            if isinstance(resposta.get_json(), list):
+                valor = next(
+                    item["previsao_entrega"]
+                    for item in resposta.get_json()
+                    if item["id"] == carga_id
+                )
+            else:
+                valor = resposta.get_json()["previsao_entrega"]
+            self.assertEqual(valor, "05/11/2026 12:30")
+
+        sem_viagem = self.client.get(
+            f"/api/cliente/minhas-cargas/{carga_sem_viagem_id}",
+            headers=headers,
+        )
+        self.assert_status(sem_viagem, 200)
+        self.assertEqual(sem_viagem.get_json()["origem"], "")
+        self.assertEqual(
+            sem_viagem.get_json()["previsao_entrega"],
+            "05/11/2026 12:30",
+        )
+
+    def test_cliente_idor_ocorrencias_comprovantes_e_download(self):
+        with self.app.app_context():
+            clientes = [
+                self.Cliente(razao_social=f"Cliente IDOR {indice}")
+                for indice in ("A", "B")
+            ]
+            usuarios = [
+                self.UsuarioSistema(
+                    nome=f"Cliente IDOR {indice}",
+                    usuario=f"cliente-idor-{indice.lower()}",
+                    email=f"cliente-idor-{indice.lower()}@example.invalid",
+                    senha="hash-cliente",
+                    perfil="cliente",
+                    ativo=True,
+                )
+                for indice in ("A", "B")
+            ]
+            self.db.session.add_all(clientes + usuarios)
+            self.db.session.flush()
+            self.db.session.add_all([
+                self.ClienteUsuario(
+                    cliente_id=cliente.id,
+                    usuario_sistema_id=usuario.id,
+                    nome=usuario.nome,
+                    empresa=cliente.razao_social,
+                    email=usuario.email,
+                    senha="hash-cliente",
+                    ativo=True,
+                )
+                for cliente, usuario in zip(clientes, usuarios)
+            ])
+            carga_b = self.Rastreamento(
+                codigo="CLIENTE-IDOR-B",
+                cliente=clientes[1].razao_social,
+                cliente_id=clientes[1].id,
+                status="Em trânsito",
+                local_atual="A",
+                destino="B",
+            )
+            self.db.session.add(carga_b)
+            self.db.session.flush()
+            viagem_b = self.Viagem(
+                rastreamento_id=carga_b.id,
+                origem="A",
+                destino="B",
+                status="Em trânsito",
+            )
+            ocorrencia_previa = self.OcorrenciaEntrega(
+                rastreamento_id=carga_b.id,
+                titulo="Ocorrência B",
+                descricao="Privada",
+            )
+            self.db.session.add_all([viagem_b, ocorrencia_previa])
+            self.db.session.flush()
+            arquivo_b = self.ArquivoComprovanteViagem(
+                viagem_id=viagem_b.id,
+                nome_arquivo="cliente-b-comprovante.pdf",
+            )
+            self.db.session.add(arquivo_b)
+            self.db.session.commit()
+            carga_b_id = carga_b.id
+            arquivo_b_id = arquivo_b.id
+            ocorrencia_previa_id = ocorrencia_previa.id
+            token_a, token_b = [
+                type(self).create_access_token(identity=str(usuario.id))
+                for usuario in usuarios
+            ]
+
+        from reportlab.pdfgen import canvas
+
+        conteudo_pdf = io.BytesIO()
+        documento_pdf = canvas.Canvas(conteudo_pdf)
+        documento_pdf.drawString(72, 720, "Comprovante temporario do Cliente B")
+        documento_pdf.save()
+        pdf_bytes = conteudo_pdf.getvalue()
+        arquivo_path = Path(self.upload_dir) / "cliente-b-comprovante.pdf"
+        arquivo_path.write_bytes(pdf_bytes)
+        try:
+            with self.app.app_context():
+                antes = self.OcorrenciaEntrega.query.filter_by(
+                    rastreamento_id=carga_b_id
+                ).count()
+            headers_a = self.auth(token_a)
+            for metodo, url, kwargs in (
+                ("get", f"/api/cliente/minhas-cargas/{carga_b_id}/ocorrencias", {}),
+                ("post", f"/api/cliente/minhas-cargas/{carga_b_id}/ocorrencias", {
+                    "json": {"titulo": "IDOR", "descricao": "Tentativa"},
+                }),
+                ("get", f"/api/cliente/minhas-cargas/{carga_b_id}/comprovantes", {}),
+            ):
+                resposta = getattr(self.client, metodo)(
+                    url, headers=headers_a, **kwargs
+                )
+                self.assertIn(resposta.status_code, (403, 404))
+
+            with self.app.app_context():
+                self.assertEqual(
+                    self.OcorrenciaEntrega.query.filter_by(
+                        rastreamento_id=carga_b_id
+                    ).count(),
+                    antes,
+                )
+                self.assertTrue(
+                    self.db.session.get(
+                        self.OcorrenciaEntrega, ocorrencia_previa_id
+                    )
+                )
+
+            download_negado = self.client.get(
+                f"/api/comprovantes/arquivos/{arquivo_b_id}/download",
+                headers=headers_a,
+            )
+            self.assertEqual(download_negado.status_code, 403)
+            download_permitido = self.client.get(
+                f"/api/comprovantes/arquivos/{arquivo_b_id}/download",
+                headers=self.auth(token_b),
+            )
+            self.assert_status(download_permitido, 200)
+            self.assertEqual(download_permitido.data, pdf_bytes)
+            download_permitido.close()
+        finally:
+            arquivo_path.unlink(missing_ok=True)
 
     def test_dynamic_idor_and_inactive_user(self):
         with self.app.app_context():
