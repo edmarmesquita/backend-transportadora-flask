@@ -361,6 +361,7 @@ class PreStagingGateTest(unittest.TestCase):
                 status="Em trânsito",
                 data_saida=datetime(2026, 11, 4, 12, 0),
                 previsao_entrega=carga.previsao_entrega,
+                data_criacao=datetime(2026, 11, 5, 15, 8, 58, 511542),
             )
             viagem_sem_datas = self.Viagem(
                 rastreamento_id=carga.id,
@@ -368,8 +369,11 @@ class PreStagingGateTest(unittest.TestCase):
                 origem="São Paulo/SP",
                 destino="Campinas/SP",
                 status="Em trânsito",
+                data_criacao=None,
             )
             self.db.session.add_all([viagem, viagem_sem_datas])
+            self.db.session.flush()
+            viagem_sem_datas.data_criacao = None
             self.db.session.commit()
             viagem_id = viagem.id
             viagem_sem_datas_id = viagem_sem_datas.id
@@ -391,6 +395,11 @@ class PreStagingGateTest(unittest.TestCase):
             detalhe.get_json()["previsao_entrega"],
             "04/11/2026 14:30",
         )
+        self.assertEqual(detalhe.get_json()["data_criacao"], "05/11/2026 12:08")
+        self.assertEqual(
+            detalhe.get_json()["data_criacao_iso"],
+            "2026-11-05T15:08:58.511542Z",
+        )
         sem_datas = self.client.get(
             f"/api/motorista/minhas-viagens/{viagem_sem_datas_id}",
             headers=self.auth(tokens[0]),
@@ -398,6 +407,15 @@ class PreStagingGateTest(unittest.TestCase):
         self.assert_status(sem_datas, 200)
         self.assertEqual(sem_datas.get_json()["data_saida"], "")
         self.assertEqual(sem_datas.get_json()["previsao_entrega"], "")
+        self.assertEqual(sem_datas.get_json()["data_criacao"], "")
+        self.assertIsNone(sem_datas.get_json()["data_criacao_iso"])
+
+        historico = self.client.get(
+            f"/api/motorista/minhas-viagens/{viagem_id}/historico",
+            headers=self.auth(tokens[0]),
+        )
+        self.assert_status(historico, 200)
+        self.assertEqual(historico.get_json(), [])
 
         outro_motorista = self.client.get(
             f"/api/motorista/minhas-viagens/{viagem_id}",

@@ -32,6 +32,7 @@ from utils.datas import (
     exibir_data_operacional_local,
     formatar_data_brasilia,
     formatar_instante_utc_brasilia,
+    serializar_instante_utc,
 )
 from utils.constantes import (
     TRANSICOES_VIAGEM,
@@ -863,17 +864,11 @@ def api_detalhe_viagem_motorista(id):
         "previsao_entrega": exibir_data_operacional_local(
             viagem.previsao_entrega
         ),
-        "data_criacao": (
-            viagem.data_criacao.strftime(
-                "%d/%m/%Y %H:%M"
-            )
-            if viagem.data_criacao
-            else ""
+        "data_criacao": formatar_instante_utc_brasilia(
+            viagem.data_criacao
         ),
-        "data_criacao_iso": (
-            viagem.data_criacao.isoformat()
-            if viagem.data_criacao
-            else None
+        "data_criacao_iso": serializar_instante_utc(
+            viagem.data_criacao
         )
     }), 200
 
