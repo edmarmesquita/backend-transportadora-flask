@@ -15,6 +15,7 @@ from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista, Veiculo
 from models.usuarios import UsuarioSistema
 from services.historicos import registrar_historico
+from services.inicio_viagem import registrar_dados_inicio_execucao
 from services.auditoria import registrar_log, snapshot_objeto
 from services.rate_limit import verificar_limite
 from services.recursos import (
@@ -39,7 +40,6 @@ from utils.datas import (
     formatar_data_brasilia,
     formatar_data_operacional_local,
     formatar_instante_utc_brasilia,
-    instante_atual_utc,
     serializar_instante_utc,
 )
 
@@ -276,12 +276,7 @@ def api_atualizar_status_viagem(id):
             and novo_status == "Em trânsito"
         )
         if iniciou_execucao:
-            if viagem.data_saida is None:
-                # Instante real em UTC naive, conforme convencao tecnica legada.
-                viagem.data_saida = instante_atual_utc().replace(tzinfo=None)
-            if viagem.previsao_entrega is None and carga:
-                # Copia o valor planejado local sem conversao ou deslocamento.
-                viagem.previsao_entrega = carga.previsao_entrega
+            registrar_dados_inicio_execucao(viagem, carga)
 
         viagem.status = novo_status
 

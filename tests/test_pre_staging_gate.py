@@ -183,7 +183,7 @@ class PreStagingGateTest(unittest.TestCase):
             ids = (viagem_nova.id, viagem_existente.id)
 
         with patch(
-            "routes.admin_viagens.instante_atual_utc",
+            "services.inicio_viagem.instante_atual_utc",
             return_value=partida_utc,
         ):
             for viagem_id in ids:
@@ -217,6 +217,193 @@ class PreStagingGateTest(unittest.TestCase):
             self.assertNotEqual(primeira.data_saida, planejada_saida)
             self.assertEqual(segunda.data_saida, partida_existente)
             self.assertEqual(segunda.previsao_entrega, entrega_existente)
+
+    def test_inicio_viagem_pelo_motorista_grava_datas_reais_sem_sobrescrever(self):
+        from datetime import timezone
+
+        partida_utc = datetime(2026, 11, 4, 12, 0, tzinfo=timezone.utc)
+        entrega_planejada = datetime(2026, 11, 4, 14, 30)
+        partida_existente = datetime(2026, 11, 4, 10, 15)
+        entrega_existente = datetime(2026, 11, 5, 19, 45)
+
+        with self.app.app_context():
+            usuarios = [
+                self.UsuarioSistema(
+                    nome=f"Motorista Inicio {indice}",
+                    usuario=f"motorista-inicio-{indice}",
+                    email=f"motorista-inicio-{indice}@example.invalid",
+                    senha="hash-motorista",
+                    perfil="motorista",
+                    ativo=True,
+                )
+                for indice in range(2)
+            ]
+            self.db.session.add_all(usuarios)
+            self.db.session.flush()
+            motoristas = [
+                self.Motorista(
+                    nome=usuario.nome,
+                    usuario_sistema_id=usuario.id,
+                    status="Ativo",
+                )
+                for usuario in usuarios
+            ]
+            self.db.session.add_all(motoristas)
+            self.db.session.flush()
+            cargas = [
+                self.Rastreamento(
+                    codigo=f"GATE-MOTORISTA-INICIO-{indice}",
+                    cliente="Cliente início motorista",
+                    status="Planejada",
+                    local_atual="São Paulo/SP",
+                    destino="Campinas/SP",
+                    data_prevista_saida=datetime(2026, 11, 4, 8, 0),
+                    previsao_entrega=entrega_planejada,
+                )
+                for indice in range(2)
+            ]
+            self.db.session.add_all(cargas)
+            self.db.session.flush()
+            viagens = [
+                self.Viagem(
+                    rastreamento_id=cargas[0].id,
+                    motorista_id=motoristas[0].id,
+                    origem="São Paulo/SP",
+                    destino="Campinas/SP",
+                    status="Planejada",
+                ),
+                self.Viagem(
+                    rastreamento_id=cargas[1].id,
+                    motorista_id=motoristas[1].id,
+                    origem="São Paulo/SP",
+                    destino="Campinas/SP",
+                    status="Planejada",
+                    data_saida=partida_existente,
+                    previsao_entrega=entrega_existente,
+                ),
+            ]
+            self.db.session.add_all(viagens)
+            self.db.session.commit()
+            ids = [viagem.id for viagem in viagens]
+            tokens = [
+                type(self).create_access_token(identity=str(usuario.id))
+                for usuario in usuarios
+            ]
+
+        with patch(
+            "services.inicio_viagem.instante_atual_utc",
+            return_value=partida_utc,
+        ):
+            for viagem_id, token in zip(ids, tokens):
+                response = self.client.post(
+                    f"/api/motorista/minhas-viagens/{viagem_id}/status",
+                    json={"status": "Em trânsito"},
+                    headers=self.auth(token),
+                )
+                self.assert_status(response, 200)
+
+        with self.app.app_context():
+            primeira = self.db.session.get(self.Viagem, ids[0])
+            primeira_carga = self.db.session.get(
+                self.Rastreamento, primeira.rastreamento_id
+            )
+            segunda = self.db.session.get(self.Viagem, ids[1])
+            self.assertEqual(primeira.data_saida, datetime(2026, 11, 4, 12, 0))
+            self.assertNotEqual(
+                primeira.data_saida,
+                datetime(2026, 11, 4, 8, 0),
+            )
+            self.assertEqual(primeira.previsao_entrega, entrega_planejada)
+            self.assertEqual(primeira_carga.status, "Em trânsito")
+            self.assertEqual(segunda.data_saida, partida_existente)
+            self.assertEqual(segunda.previsao_entrega, entrega_existente)
+
+    def test_detalhe_motorista_serializa_datas_e_bloqueia_idor(self):
+        with self.app.app_context():
+            usuarios = [
+                self.UsuarioSistema(
+                    nome=f"Motorista Detalhe {indice}",
+                    usuario=f"motorista-detalhe-{indice}",
+                    email=f"motorista-detalhe-{indice}@example.invalid",
+                    senha="hash-motorista",
+                    perfil="motorista",
+                    ativo=True,
+                )
+                for indice in range(2)
+            ]
+            self.db.session.add_all(usuarios)
+            self.db.session.flush()
+            motoristas = [
+                self.Motorista(
+                    nome=usuario.nome,
+                    usuario_sistema_id=usuario.id,
+                    status="Ativo",
+                )
+                for usuario in usuarios
+            ]
+            self.db.session.add_all(motoristas)
+            self.db.session.flush()
+            carga = self.Rastreamento(
+                codigo="GATE-DETALHE-MOTORISTA-DATAS",
+                cliente="Cliente detalhe motorista",
+                status="Em trânsito",
+                local_atual="São Paulo/SP",
+                destino="Campinas/SP",
+                previsao_entrega=datetime(2026, 11, 4, 14, 30),
+            )
+            self.db.session.add(carga)
+            self.db.session.flush()
+            viagem = self.Viagem(
+                rastreamento_id=carga.id,
+                motorista_id=motoristas[0].id,
+                origem="São Paulo/SP",
+                destino="Campinas/SP",
+                status="Em trânsito",
+                data_saida=datetime(2026, 11, 4, 12, 0),
+                previsao_entrega=carga.previsao_entrega,
+            )
+            viagem_sem_datas = self.Viagem(
+                rastreamento_id=carga.id,
+                motorista_id=motoristas[0].id,
+                origem="São Paulo/SP",
+                destino="Campinas/SP",
+                status="Em trânsito",
+            )
+            self.db.session.add_all([viagem, viagem_sem_datas])
+            self.db.session.commit()
+            viagem_id = viagem.id
+            viagem_sem_datas_id = viagem_sem_datas.id
+            tokens = [
+                type(self).create_access_token(identity=str(usuario.id))
+                for usuario in usuarios
+            ]
+
+        detalhe = self.client.get(
+            f"/api/motorista/minhas-viagens/{viagem_id}",
+            headers=self.auth(tokens[0]),
+        )
+        self.assert_status(detalhe, 200)
+        self.assertEqual(
+            detalhe.get_json()["data_saida"],
+            "04/11/2026 09:00",
+        )
+        self.assertEqual(
+            detalhe.get_json()["previsao_entrega"],
+            "04/11/2026 14:30",
+        )
+        sem_datas = self.client.get(
+            f"/api/motorista/minhas-viagens/{viagem_sem_datas_id}",
+            headers=self.auth(tokens[0]),
+        )
+        self.assert_status(sem_datas, 200)
+        self.assertEqual(sem_datas.get_json()["data_saida"], "")
+        self.assertEqual(sem_datas.get_json()["previsao_entrega"], "")
+
+        outro_motorista = self.client.get(
+            f"/api/motorista/minhas-viagens/{viagem_id}",
+            headers=self.auth(tokens[1]),
+        )
+        self.assert_status(outro_motorista, 404)
 
     def test_serializacao_temporal_dos_endpoints_prioritarios(self):
         instante_usuario = datetime(2026, 11, 1, 21, 8)

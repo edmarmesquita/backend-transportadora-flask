@@ -15,6 +15,7 @@ from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista, Veiculo
 from models.usuarios import UsuarioSistema
 from services.historicos import registrar_historico
+from services.inicio_viagem import registrar_dados_inicio_execucao
 from services.auditoria import registrar_log
 from services.rate_limit import verificar_limite
 from services.recursos import (
@@ -150,6 +151,13 @@ def api_atualizar_status_viagem_motorista(id):
         }), 409
 
     try:
+        iniciou_execucao = (
+            str(viagem.status).strip().lower() == "planejada"
+            and novo_status == "Em trânsito"
+        )
+        if iniciou_execucao:
+            registrar_dados_inicio_execucao(viagem, carga)
+
         viagem.status = novo_status
 
         # Status operacional = motorista em viagem.
@@ -849,6 +857,12 @@ def api_detalhe_viagem_motorista(id):
         "origem": viagem.origem,
         "destino": viagem.destino,
         "status": viagem.status,
+        "data_saida": formatar_instante_utc_brasilia(
+            viagem.data_saida
+        ),
+        "previsao_entrega": exibir_data_operacional_local(
+            viagem.previsao_entrega
+        ),
         "data_criacao": (
             viagem.data_criacao.strftime(
                 "%d/%m/%Y %H:%M"
