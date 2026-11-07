@@ -10,6 +10,8 @@ STATUS_PUBLICOS = {
 }
 
 TEXTOS_PUBLICOS = {tipo: texto for tipo, texto in STATUS_PUBLICOS.values()}
+TIPO_ESTOU_CHEGANDO = "ESTOU_CHEGANDO"
+TEXTOS_PUBLICOS[TIPO_ESTOU_CHEGANDO] = "O motorista avisou que está chegando."
 TIPOS_PUBLICOS = frozenset(TEXTOS_PUBLICOS)
 
 

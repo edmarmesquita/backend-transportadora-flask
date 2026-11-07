@@ -5,7 +5,7 @@ from extensions import db
 from models.clientes import Cliente
 from models.comprovantes import ArquivoComprovanteViagem, ComprovanteEntrega
 from models.historicos import HistoricoRastreamento
-from services.eventos_cliente import TEXTOS_PUBLICOS, TIPOS_PUBLICOS
+from services.eventos_cliente import TEXTOS_PUBLICOS, TIPOS_PUBLICOS, TIPO_ESTOU_CHEGANDO
 from models.ocorrencias import OcorrenciaEntrega
 from models.operacao import Rastreamento, Viagem
 from models.usuarios import UsuarioSistema

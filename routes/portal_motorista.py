@@ -3,14 +3,17 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from sqlalchemy.exc import IntegrityError
 
 from extensions import db
 from models.comprovantes import (
     ArquivoComprovanteViagem,
     ComprovanteEntrega,
 )
+from models.avisos import AvisoChegada
 from models.historicos import HistoricoRastreamento, HistoricoViagem
 from services.eventos_cliente import tipo_status_comercial
+from services.eventos_cliente import TIPO_ESTOU_CHEGANDO
 from models.localizacoes import LocalizacaoMotorista, LocalizacaoViagem
 from models.ocorrencias import OcorrenciaViagem
 from models.operacao import Rastreamento, Viagem
@@ -47,6 +50,66 @@ portal_motorista_bp = Blueprint(
     "portal_motorista",
     __name__
 )
+
+
+@portal_motorista_bp.route(
+    "/api/motorista/minhas-viagens/<int:id>/estou-chegando",
+    methods=["POST"],
+)
+@jwt_required()
+def api_estou_chegando(id):
+    usuario = db.session.get(UsuarioSistema, int(get_jwt_identity()))
+    if not usuario or not usuario.ativo:
+        return jsonify({"erro": "Usuário não autorizado."}), 401
+    if str(usuario.perfil).strip().lower() != "motorista":
+        return jsonify({"erro": "Acesso permitido somente para motoristas."}), 403
+    motorista = Motorista.query.filter_by(usuario_sistema_id=usuario.id).first()
+    if not motorista:
+        return jsonify({"erro": "O usuário não está vinculado a um motorista."}), 404
+    if str(motorista.status).strip().lower() == "inativo":
+        return jsonify({"erro": "Este motorista está inativo."}), 403
+    viagem = Viagem.query.filter_by(id=id, motorista_id=motorista.id).first()
+    if not viagem:
+        return jsonify({"erro": "Viagem não encontrada ou não pertence a este motorista."}), 404
+    if str(viagem.status).strip().lower() != "saiu para entrega":
+        return jsonify({"erro": "O aviso só pode ser enviado quando a viagem saiu para entrega."}), 409
+    existente = AvisoChegada.query.filter_by(viagem_id=viagem.id).first()
+    if existente:
+        return jsonify({
+            "mensagem": "O aviso já havia sido enviado.",
+            "ja_enviado": True,
+            "data_aviso": serializar_instante_utc(existente.data_aviso),
+        }), 200
+    carga = db.session.get(Rastreamento, viagem.rastreamento_id)
+    agora = datetime.utcnow()
+    aviso = AvisoChegada(
+        viagem_id=viagem.id, rastreamento_id=viagem.rastreamento_id,
+        motorista_id=motorista.id, data_aviso=agora,
+    )
+    evento = HistoricoRastreamento(
+        rastreamento_id=viagem.rastreamento_id, tipo_evento=TIPO_ESTOU_CHEGANDO,
+        status=viagem.status, local=carga.local_atual if carga else viagem.destino,
+        observacao="Aviso de chegada enviado pelo motorista.", data_evento=agora,
+    )
+    operacional = HistoricoViagem(
+        viagem_id=viagem.id, status=TIPO_ESTOU_CHEGANDO,
+        observacao="Motorista enviou aviso de chegada.", data_evento=agora,
+    )
+    try:
+        db.session.add_all([aviso, evento, operacional])
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        existente = AvisoChegada.query.filter_by(viagem_id=viagem.id).first()
+        if existente:
+            return jsonify({"mensagem": "O aviso já havia sido enviado.", "ja_enviado": True,
+                            "data_aviso": serializar_instante_utc(existente.data_aviso)}), 200
+        return jsonify({"erro": "Não foi possível registrar o aviso."}), 409
+    except Exception:
+        db.session.rollback()
+        return jsonify({"erro": "Não foi possível registrar o aviso."}), 500
+    return jsonify({"mensagem": "Aviso enviado.", "ja_enviado": False,
+                    "data_aviso": serializar_instante_utc(agora)}), 201
 
 
 @portal_motorista_bp.route(
@@ -949,6 +1012,8 @@ def api_detalhe_viagem_motorista(id):
             )
         }), 404
 
+    aviso_chegada = AvisoChegada.query.filter_by(viagem_id=viagem.id).first()
+
     return jsonify({
         "id": viagem.id,
         "codigo_carga": (
@@ -985,7 +1050,11 @@ def api_detalhe_viagem_motorista(id):
         ),
         "data_criacao_iso": serializar_instante_utc(
             viagem.data_criacao
-        )
+        ),
+        "estou_chegando": bool(aviso_chegada),
+        "data_aviso_chegada": serializar_instante_utc(
+            aviso_chegada.data_aviso if aviso_chegada else None
+        ),
     }), 200
 
 

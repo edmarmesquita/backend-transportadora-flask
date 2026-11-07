@@ -224,6 +224,7 @@ from models.historicos import (
 from models.ocorrencias import OcorrenciaEntrega, OcorrenciaViagem
 from models.comprovantes import ComprovanteEntrega, ArquivoComprovanteViagem
 from models.localizacoes import LocalizacaoMotorista, LocalizacaoViagem
+from models.avisos import AvisoChegada
 from services.compatibilidade_schema import (
     adicionar_colunas_auditoria,
     adicionar_colunas_operacionais
