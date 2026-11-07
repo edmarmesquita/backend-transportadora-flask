@@ -266,6 +266,9 @@ with app.app_context():
     if USAR_COMPATIBILIDADE_SCHEMA_SQLITE:
         adicionar_colunas_operacionais()
         adicionar_colunas_auditoria()
+    else:
+        from services.compatibilidade_schema import adicionar_tipo_evento_banco_existente
+        adicionar_tipo_evento_banco_existente(db.engine)
 
     admin_padrao = UsuarioSistema.query.filter_by(
         perfil="administrador",
