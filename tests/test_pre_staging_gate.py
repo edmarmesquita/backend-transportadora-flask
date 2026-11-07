@@ -485,6 +485,7 @@ class PreStagingGateTest(unittest.TestCase):
             self.db.session.flush()
             self.db.session.add(self.HistoricoRastreamento(
                 rastreamento_id=carga.id,
+                tipo_evento="STATUS_EM_TRANSITO",
                 status="Em trânsito",
                 local="São Paulo/SP",
                 observacao="Evento com instante igual à criação da viagem.",
@@ -1817,11 +1818,7 @@ class PreStagingGateTest(unittest.TestCase):
         self.assert_status(detalhe_cliente, 200)
         dados_cliente = detalhe_cliente.get_json()
         self.assertEqual(dados_cliente["local_atual"], "Jundiaí/SP")
-        self.assertEqual(dados_cliente["historico"][-1]["local"], "Jundiaí/SP")
-        self.assertEqual(
-            dados_cliente["historico"][-1]["observacao"],
-            "Viagem seguindo normalmente em direção a Campinas/SP.",
-        )
+        self.assertEqual(dados_cliente["historico"], [])
 
         timestamp_da_primeira_localizacao = dados_cliente["ultima_atualizacao"]
         response_repetido = self.client.post(
@@ -2013,6 +2010,71 @@ class PreStagingGateTest(unittest.TestCase):
             headers=self.auth(token_outro),
         )
         self.assert_status(resposta_comprovante_nao_autorizada, 404)
+
+    def test_cliente_timeline_publica_fail_closed(self):
+        from services.eventos_cliente import STATUS_PUBLICOS
+
+        with self.app.app_context():
+            cliente = self.Cliente(razao_social="Cliente timeline segura")
+            usuario = self.UsuarioSistema(
+                nome="Cliente timeline", usuario="cliente-timeline-segura",
+                email="timeline-segura@example.invalid", senha="hash-cliente",
+                perfil="cliente", ativo=True,
+            )
+            self.db.session.add_all([cliente, usuario])
+            self.db.session.flush()
+            self.db.session.add(self.ClienteUsuario(
+                cliente_id=cliente.id, usuario_sistema_id=usuario.id,
+                nome=usuario.nome, empresa=cliente.razao_social,
+                email=usuario.email, senha="hash-cliente", ativo=True,
+            ))
+            carga = self.Rastreamento(
+                codigo="TIMELINE-SEGURA", cliente=cliente.razao_social,
+                cliente_id=cliente.id, status="Carregando",
+                local_atual="Origem", destino="Destino",
+            )
+            self.db.session.add(carga)
+            self.db.session.flush()
+            instante = datetime(2026, 11, 5, 12, 0)
+            publicos = []
+            for indice, (status, (tipo, texto)) in enumerate(STATUS_PUBLICOS.items()):
+                evento = self.HistoricoRastreamento(
+                    rastreamento_id=carga.id, tipo_evento=tipo,
+                    status=status, local="Origem",
+                    observacao="Motorista João placa ABC1D23 ID 99",
+                    data_evento=instante + timedelta(minutes=indice),
+                )
+                self.db.session.add(evento)
+                publicos.append((tipo, texto))
+            for tipo in (None, "TIPO_FUTURO", "CARGA_CRIADA",
+                         "MOTORISTA_ATRIBUIDO", "VEICULO_ATRIBUIDO",
+                         "VIAGEM_PLANEJADA", "INTERNO"):
+                self.db.session.add(self.HistoricoRastreamento(
+                    rastreamento_id=carga.id, tipo_evento=tipo,
+                    status="Carregando", local="Origem",
+                    observacao="Motorista João placa ABC1D23 ID 99",
+                    data_evento=instante + timedelta(minutes=10),
+                ))
+            self.db.session.commit()
+            carga_id = carga.id
+            token = type(self).create_access_token(identity=str(usuario.id))
+
+        resposta = self.client.get(
+            f"/api/cliente/minhas-cargas/{carga_id}",
+            headers=self.auth(token),
+        )
+        self.assert_status(resposta, 200)
+        historico = resposta.get_json()["historico"]
+        self.assertEqual([e["status"] for e in historico], list(STATUS_PUBLICOS))
+        self.assertEqual([e["observacao"] for e in historico],
+                         [texto for _, texto in publicos])
+        self.assertEqual(historico[0]["data_evento"], "05/11/2026 09:00")
+        self.assertNotIn("João", resposta.get_data(as_text=True))
+        self.assertNotIn("ABC1D23", resposta.get_data(as_text=True))
+        self.assertEqual(sum(e["status"] == "Carregando" for e in historico), 1)
+        with self.app.app_context():
+            self.assertEqual(self.HistoricoRastreamento.query.filter_by(
+                rastreamento_id=carga_id).count(), 13)
 
     def test_cliente_origem_previsao_alinhadas_e_carga_sem_viagem(self):
         with self.app.app_context():

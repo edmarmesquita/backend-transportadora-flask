@@ -56,6 +56,7 @@ class HistoricoRastreamento(db.Model):
     status = db.Column(db.String(50), nullable=False)
     local = db.Column(db.String(100), nullable=False)
     observacao = db.Column(db.Text)
+    tipo_evento = db.Column(db.String(50), nullable=False, default="INTERNO", server_default="INTERNO")
     data_evento = db.Column(db.DateTime, default=datetime.utcnow)
 
     rastreamento = db.relationship('Rastreamento', backref='historico')

@@ -5,6 +5,7 @@ from extensions import db
 from models.clientes import Cliente
 from models.comprovantes import ArquivoComprovanteViagem, ComprovanteEntrega
 from models.historicos import HistoricoRastreamento
+from services.eventos_cliente import TEXTOS_PUBLICOS, TIPOS_PUBLICOS
 from models.ocorrencias import OcorrenciaEntrega
 from models.operacao import Rastreamento, Viagem
 from models.usuarios import UsuarioSistema
@@ -174,8 +175,11 @@ def api_detalhe_carga_cliente_logado(carga_id):
 
     historico = HistoricoRastreamento.query.filter_by(
         rastreamento_id=carga.id
+        ).filter(
+            HistoricoRastreamento.tipo_evento.in_(TIPOS_PUBLICOS)
         ).order_by(
-            HistoricoRastreamento.data_evento.asc()
+            HistoricoRastreamento.data_evento.asc(),
+            HistoricoRastreamento.id.asc()
         ).all()
 
     return jsonify({
@@ -203,7 +207,7 @@ def api_detalhe_carga_cliente_logado(carga_id):
             "id": evento.id,
             "status": evento.status,
             "local": evento.local,
-            "observacao": evento.observacao or "",
+            "observacao": TEXTOS_PUBLICOS[evento.tipo_evento],
             "data_evento": formatar_data_brasilia(
                 evento.data_evento
             )

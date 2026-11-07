@@ -9,6 +9,7 @@ from models.comprovantes import (
     ComprovanteEntrega,
 )
 from models.historicos import HistoricoRastreamento, HistoricoViagem
+from services.eventos_cliente import tipo_status_comercial
 from models.localizacoes import LocalizacaoViagem
 from models.ocorrencias import OcorrenciaViagem
 from models.operacao import Rastreamento, Viagem
@@ -327,6 +328,7 @@ def api_atualizar_status_viagem(id):
 
         if carga:
             historico_rastreamento = HistoricoRastreamento(
+                tipo_evento=tipo_status_comercial(novo_status),
                 rastreamento_id=carga.id,
                 status=novo_status,
                 local=carga.local_atual,
@@ -894,6 +896,7 @@ def api_finalizar_viagem(viagem_id):
         )
 
         historico_rastreamento = HistoricoRastreamento(
+            tipo_evento="STATUS_ENTREGUE",
             rastreamento_id=carga.id,
             status="Entregue",
             local=viagem.destino,
@@ -1185,6 +1188,7 @@ def api_despachar_viagem():
         veiculo.status = "Em viagem"
 
         historico = HistoricoRastreamento(
+            tipo_evento="STATUS_EM_TRANSITO",
             rastreamento_id=carga.id,
             status="Em trânsito",
             local=origem,

@@ -6,6 +6,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from extensions import db
 from models.clientes import Cliente
 from models.historicos import HistoricoRastreamento
+from services.eventos_cliente import tipo_status_comercial
 from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista, Veiculo
 from models.usuarios import UsuarioSistema
@@ -285,6 +286,7 @@ def api_criar_carga():
     db.session.flush()
 
     primeiro_evento = HistoricoRastreamento(
+    tipo_evento="CARGA_CRIADA",
     rastreamento_id=nova_carga.id,
     status=nova_carga.status or "Carga criada",
     local=nova_carga.local_atual or "Origem não informada",
@@ -657,6 +659,7 @@ def criar_viagem_para_carga(id):
     )
 
     historico_rastreamento = HistoricoRastreamento(
+        tipo_evento="VIAGEM_PLANEJADA",
         rastreamento_id=carga.id,
         status=carga.status,
         local=carga.local_atual,
@@ -877,6 +880,7 @@ def atribuir_motorista(id):
             )
 
             historico_rastreamento = HistoricoRastreamento(
+                tipo_evento="MOTORISTA_ATRIBUIDO",
                 rastreamento_id=carga.id,
                 status=carga.status,
                 local=carga.local_atual,
@@ -1161,6 +1165,7 @@ def atribuir_veiculo(id):
             )
 
             historico_rastreamento = HistoricoRastreamento(
+                tipo_evento="VEICULO_ATRIBUIDO",
                 rastreamento_id=carga.id,
                 status=carga.status,
                 local=carga.local_atual,
@@ -1320,6 +1325,7 @@ def atualizar_status_carga(id):
 )
 
     historico_rastreamento = HistoricoRastreamento(
+        tipo_evento=tipo_status_comercial(novo_status),
         rastreamento_id=carga.id,
         status=novo_status,
         local=carga.local_atual,

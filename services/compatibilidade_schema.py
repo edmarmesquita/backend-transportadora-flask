@@ -1,6 +1,22 @@
 from config import DB_PATH as db_path
 
 
+def adicionar_tipo_evento_banco_existente(engine):
+    """Evolui bancos SQL já criados, sem classificar registros antigos."""
+    from sqlalchemy import inspect, text
+
+    inspetor = inspect(engine)
+    if "historico_rastreamento" not in inspetor.get_table_names():
+        return
+    colunas = {coluna["name"] for coluna in inspetor.get_columns("historico_rastreamento")}
+    if "tipo_evento" not in colunas:
+        with engine.begin() as conexao:
+            conexao.execute(text(
+                "ALTER TABLE historico_rastreamento "
+                "ADD COLUMN tipo_evento VARCHAR(50) NOT NULL DEFAULT 'INTERNO'"
+            ))
+
+
 def adicionar_colunas_auditoria():
     import sqlite3
 
@@ -110,6 +126,17 @@ def adicionar_colunas_operacionais():
                 "ALTER TABLE rastreamento "
                 "ADD COLUMN status_pagamento TEXT "
                 "DEFAULT 'Pendente'"
+            )
+
+        # ==========================
+        # HISTORICO_RASTREAMENTO: legados permanecem internos.
+        # ==========================
+        cursor.execute("PRAGMA table_info(historico_rastreamento)")
+        colunas_historico = [coluna[1] for coluna in cursor.fetchall()]
+        if "tipo_evento" not in colunas_historico:
+            cursor.execute(
+                "ALTER TABLE historico_rastreamento "
+                "ADD COLUMN tipo_evento TEXT NOT NULL DEFAULT 'INTERNO'"
             )
 
         # ==========================
