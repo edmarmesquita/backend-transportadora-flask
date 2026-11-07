@@ -1,4 +1,5 @@
-from datetime import datetime
+import math
+from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
@@ -9,7 +10,7 @@ from models.comprovantes import (
     ComprovanteEntrega,
 )
 from models.historicos import HistoricoRastreamento, HistoricoViagem
-from models.localizacoes import LocalizacaoViagem
+from models.localizacoes import LocalizacaoMotorista, LocalizacaoViagem
 from models.ocorrencias import OcorrenciaViagem
 from models.operacao import Rastreamento, Viagem
 from models.recursos import Motorista, Veiculo
@@ -780,6 +781,119 @@ def api_criar_localizacao_motorista(id):
 
         return jsonify({
             "erro": "Não foi possível registrar a localização."
+        }), 500
+
+
+@portal_motorista_bp.route(
+    "/api/motorista/minhas-viagens/<int:id>/localizacoes/gps",
+    methods=["POST"]
+)
+@jwt_required()
+def api_registrar_localizacao_gps_motorista(id):
+    usuario_id = int(get_jwt_identity())
+    usuario_sistema = db.session.get(UsuarioSistema, usuario_id)
+
+    if not usuario_sistema or not usuario_sistema.ativo:
+        return jsonify({"erro": "UsuÃ¡rio nÃ£o autorizado."}), 401
+
+    if str(usuario_sistema.perfil).strip().lower() != "motorista":
+        return jsonify({
+            "erro": "Acesso permitido somente para motoristas."
+        }), 403
+
+    motorista = Motorista.query.filter_by(
+        usuario_sistema_id=usuario_sistema.id
+    ).first()
+
+    if not motorista:
+        return jsonify({
+            "erro": "O usuÃ¡rio nÃ£o estÃ¡ vinculado a um motorista."
+        }), 404
+
+    if str(motorista.status).strip().lower() == "inativo":
+        return jsonify({"erro": "Este motorista estÃ¡ inativo."}), 403
+
+    viagem = Viagem.query.filter_by(
+        id=id,
+        motorista_id=motorista.id
+    ).first()
+
+    if not viagem:
+        return jsonify({
+            "erro": (
+                "Viagem nÃ£o encontrada ou nÃ£o pertence "
+                "a este motorista."
+            )
+        }), 404
+
+    dados = request.get_json(silent=True) or {}
+    latitude = dados.get("latitude")
+    longitude = dados.get("longitude")
+    instante_texto = dados.get("captured_at")
+
+    if latitude is None or longitude is None or not instante_texto:
+        return jsonify({
+            "erro": "Informe latitude, longitude e instante da captura."
+        }), 400
+
+    if (
+        isinstance(latitude, bool)
+        or isinstance(longitude, bool)
+        or not isinstance(latitude, (int, float))
+        or not isinstance(longitude, (int, float))
+    ):
+        return jsonify({"erro": "Coordenadas invÃ¡lidas."}), 400
+
+    latitude = float(latitude)
+    longitude = float(longitude)
+    if (
+        not math.isfinite(latitude)
+        or not math.isfinite(longitude)
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        return jsonify({"erro": "Coordenadas invÃ¡lidas."}), 400
+
+    if not isinstance(instante_texto, str):
+        return jsonify({"erro": "Instante da captura invÃ¡lido."}), 400
+
+    try:
+        instante = datetime.fromisoformat(
+            instante_texto.strip().replace("Z", "+00:00")
+        )
+    except ValueError:
+        return jsonify({"erro": "Instante da captura invÃ¡lido."}), 400
+
+    if instante.tzinfo is None or instante.utcoffset() is None:
+        return jsonify({"erro": "Instante da captura deve incluir fuso UTC."}), 400
+
+    instante_utc_naive = instante.astimezone(timezone.utc).replace(tzinfo=None)
+
+    try:
+        registro = LocalizacaoMotorista(
+            motorista_id=motorista.id,
+            rastreamento_id=viagem.rastreamento_id,
+            latitude=str(latitude),
+            longitude=str(longitude),
+            data_registro=instante_utc_naive,
+        )
+        db.session.add(registro)
+        db.session.commit()
+
+        return jsonify({
+            "mensagem": "LocalizaÃ§Ã£o atualizada.",
+            "id": registro.id,
+            "data_registro": serializar_instante_utc(
+                registro.data_registro
+            ),
+        }), 201
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Falha ao registrar localizaÃ§Ã£o GPS do motorista."
+        )
+        return jsonify({
+            "erro": "NÃ£o foi possÃ­vel registrar a localizaÃ§Ã£o."
         }), 500
 
 

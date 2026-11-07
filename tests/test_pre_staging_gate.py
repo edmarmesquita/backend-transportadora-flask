@@ -42,7 +42,7 @@ class PreStagingGateTest(unittest.TestCase):
         from models.clientes import Cliente, ClienteUsuario
         from models.comprovantes import ArquivoComprovanteViagem, ComprovanteEntrega
         from models.historicos import HistoricoRastreamento, HistoricoViagem
-        from models.localizacoes import LocalizacaoViagem
+        from models.localizacoes import LocalizacaoMotorista, LocalizacaoViagem
         from models.ocorrencias import OcorrenciaEntrega
         from models.operacao import Rastreamento, Viagem
         from models.recursos import Motorista, Veiculo
@@ -61,6 +61,7 @@ class PreStagingGateTest(unittest.TestCase):
         cls.HistoricoViagem = HistoricoViagem
         cls.OcorrenciaEntrega = OcorrenciaEntrega
         cls.LocalizacaoViagem = LocalizacaoViagem
+        cls.LocalizacaoMotorista = LocalizacaoMotorista
         cls.Rastreamento = Rastreamento
         cls.Viagem = Viagem
         cls.Motorista = Motorista
@@ -1541,6 +1542,143 @@ class PreStagingGateTest(unittest.TestCase):
             self.assertNotIn("senha-motorista", serialized)
             self.assertNotIn("JWT", serialized.upper())
             self.assertNotIn("hash", serialized.lower())
+
+    def test_gps_motorista_persiste_coordenadas_e_preserva_viagem(self):
+        from datetime import timezone
+
+        instante_captura = datetime(
+            2026, 11, 5, 18, 53, 50, tzinfo=timezone.utc
+        )
+        with self.app.app_context():
+            cliente = self.Cliente(razao_social="Cliente GPS")
+            usuarios = [
+                self.UsuarioSistema(
+                    nome=f"Motorista GPS {indice}",
+                    usuario=f"motorista-gps-{indice}",
+                    email=f"motorista-gps-{indice}@example.invalid",
+                    senha="hash-gps",
+                    perfil="motorista",
+                    ativo=True,
+                )
+                for indice in ("A", "B")
+            ]
+            usuario_cliente = self.UsuarioSistema(
+                nome="Cliente GPS",
+                usuario="cliente-gps",
+                email="cliente-gps@example.invalid",
+                senha="hash-cliente",
+                perfil="cliente",
+                ativo=True,
+            )
+            self.db.session.add_all([cliente, *usuarios, usuario_cliente])
+            self.db.session.flush()
+            motoristas = [
+                self.Motorista(
+                    nome=usuario.nome,
+                    usuario_sistema_id=usuario.id,
+                    status="Ativo",
+                )
+                for usuario in usuarios
+            ]
+            self.db.session.add_all(motoristas)
+            self.db.session.flush()
+            carga = self.Rastreamento(
+                codigo="GATE-GPS-LOCALIZACAO",
+                cliente=cliente.razao_social,
+                cliente_id=cliente.id,
+                status="Saiu para entrega",
+                local_atual="Origem textual preservada",
+                destino="Destino",
+            )
+            self.db.session.add(carga)
+            self.db.session.flush()
+            viagem = self.Viagem(
+                rastreamento_id=carga.id,
+                motorista_id=motoristas[0].id,
+                origem="Origem",
+                destino="Destino",
+                status="Saiu para entrega",
+            )
+            self.db.session.add(viagem)
+            self.db.session.commit()
+            viagem_id = viagem.id
+            carga_id = carga.id
+            motorista_id = motoristas[0].id
+            tokens = [
+                type(self).create_access_token(identity=str(usuario.id))
+                for usuario in [*usuarios, usuario_cliente]
+            ]
+
+        endpoint = f"/api/motorista/minhas-viagens/{viagem_id}/localizacoes/gps"
+        payload = {
+            "latitude": -23.55052,
+            "longitude": -46.633308,
+            "captured_at": instante_captura.isoformat(),
+            "accuracy_m": 8.5,
+        }
+        sem_autenticacao = self.client.post(endpoint, json=payload)
+        self.assert_status(sem_autenticacao, 401)
+        cliente_negado = self.client.post(
+            endpoint,
+            json=payload,
+            headers=self.auth(tokens[2]),
+        )
+        self.assert_status(cliente_negado, 403)
+        motorista_b_negado = self.client.post(
+            endpoint,
+            json=payload,
+            headers=self.auth(tokens[1]),
+        )
+        self.assert_status(motorista_b_negado, 404)
+
+        for invalido in (
+            {**payload, "latitude": 91},
+            {**payload, "longitude": -181},
+            {"latitude": -23.5},
+        ):
+            resposta = self.client.post(
+                endpoint,
+                json=invalido,
+                headers=self.auth(tokens[0]),
+            )
+            self.assert_status(resposta, 400)
+
+        resposta = self.client.post(
+            endpoint,
+            json=payload,
+            headers=self.auth(tokens[0]),
+        )
+        self.assert_status(resposta, 201)
+        self.assertEqual(
+            resposta.get_json()["data_registro"],
+            "2026-11-05T18:53:50Z",
+        )
+
+        with self.app.app_context():
+            registros = self.LocalizacaoMotorista.query.filter_by(
+                rastreamento_id=carga_id
+            ).all()
+            self.assertEqual(len(registros), 1)
+            registro = registros[0]
+            self.assertEqual(registro.motorista_id, motorista_id)
+            self.assertEqual(registro.rastreamento_id, carga_id)
+            self.assertEqual(registro.latitude, "-23.55052")
+            self.assertEqual(registro.longitude, "-46.633308")
+            self.assertEqual(
+                registro.data_registro,
+                datetime(2026, 11, 5, 18, 53, 50),
+            )
+            carga = self.db.session.get(self.Rastreamento, carga_id)
+            viagem = self.db.session.get(self.Viagem, viagem_id)
+            self.assertEqual(carga.local_atual, "Origem textual preservada")
+            self.assertEqual(carga.status, "Saiu para entrega")
+            self.assertEqual(viagem.status, "Saiu para entrega")
+            self.assertEqual(
+                self.LocalizacaoViagem.query.filter_by(
+                    viagem_id=viagem_id
+                ).count(),
+                0,
+            )
 
     def test_motorista_localizacao_atualiza_rastreamento_e_timeline_cliente(self):
         with self.app.app_context():
