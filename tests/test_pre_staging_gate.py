@@ -43,7 +43,7 @@ class PreStagingGateTest(unittest.TestCase):
         from models.comprovantes import ArquivoComprovanteViagem, ComprovanteEntrega
         from models.historicos import HistoricoRastreamento, HistoricoViagem
         from models.localizacoes import LocalizacaoMotorista, LocalizacaoViagem
-        from models.ocorrencias import OcorrenciaEntrega
+        from models.ocorrencias import OcorrenciaEntrega, OcorrenciaViagem, AnexoOcorrenciaViagem
         from models.operacao import Rastreamento, Viagem
         from models.recursos import Motorista, Veiculo
         from models.usuarios import UsuarioSistema
@@ -60,6 +60,8 @@ class PreStagingGateTest(unittest.TestCase):
         cls.HistoricoRastreamento = HistoricoRastreamento
         cls.HistoricoViagem = HistoricoViagem
         cls.OcorrenciaEntrega = OcorrenciaEntrega
+        cls.OcorrenciaViagem = OcorrenciaViagem
+        cls.AnexoOcorrenciaViagem = AnexoOcorrenciaViagem
         cls.LocalizacaoViagem = LocalizacaoViagem
         cls.LocalizacaoMotorista = LocalizacaoMotorista
         cls.Rastreamento = Rastreamento
@@ -2789,6 +2791,166 @@ class PreStagingGateTest(unittest.TestCase):
             set(response.get_json()),
             {"codigo", "status", "previsao_entrega", "ultima_atualizacao"},
         )
+
+    def test_fotos_ocorrencia_privadas_validacao_idempotencia_e_limites(self):
+        import hashlib
+        from PIL import Image
+
+        def foto(formato, cor):
+            saida = io.BytesIO()
+            imagem = Image.new("RGB", (12, 12), cor)
+            if formato == "JPEG":
+                exif = Image.Exif()
+                exif[0x010E] = "metadado privado"
+                imagem.save(saida, format=formato, exif=exif)
+            else:
+                imagem.save(saida, format=formato)
+            return saida.getvalue()
+
+        with self.app.app_context():
+            usuarios = [self.UsuarioSistema(
+                nome=f"Foto Gate {i}", usuario=f"foto-gate-{i}",
+                email=f"foto-gate-{i}@example.invalid", senha="hash",
+                perfil="motorista" if i < 2 else "cliente", ativo=True,
+            ) for i in range(3)]
+            self.db.session.add_all(usuarios)
+            self.db.session.flush()
+            motoristas = [self.Motorista(
+                nome=usuarios[i].nome, usuario_sistema_id=usuarios[i].id, status="Ativo"
+            ) for i in range(2)]
+            self.db.session.add_all(motoristas)
+            self.db.session.flush()
+            carga = self.Rastreamento(codigo="GATE-FOTOS-OCORRENCIA", cliente="Gate", status="Em trânsito", local_atual="A", destino="B")
+            self.db.session.add(carga)
+            self.db.session.flush()
+            viagem = self.Viagem(rastreamento_id=carga.id, motorista_id=motoristas[0].id, origem="A", destino="B", status="Em trânsito")
+            outra = self.Viagem(rastreamento_id=carga.id, motorista_id=motoristas[1].id, origem="A", destino="B", status="Saiu para entrega")
+            self.db.session.add_all([viagem, outra])
+            self.db.session.flush()
+            ocorrencia = self.OcorrenciaViagem(viagem_id=viagem.id, descricao="Ocorrência com foto")
+            segunda = self.OcorrenciaViagem(viagem_id=viagem.id, descricao="Outra ocorrência")
+            alheia = self.OcorrenciaViagem(viagem_id=outra.id, descricao="Alheia")
+            self.db.session.add_all([ocorrencia, segunda, alheia])
+            self.db.session.commit()
+            ids = (viagem.id, outra.id, ocorrencia.id, segunda.id, alheia.id, motoristas[0].id)
+            tokens = [type(self).create_access_token(identity=str(u.id)) for u in usuarios]
+
+        viagem_id, outra_id, ocorrencia_id, segunda_id, alheia_id, motorista_id = ids
+        with self.app.app_context():
+            ocorrencia = self.db.session.get(self.OcorrenciaViagem, ocorrencia_id)
+            ocorrencia.data_criacao = datetime(2026, 11, 8, 11, 45, 47)
+            self.db.session.commit()
+        ocorrencias = self.client.get(
+            f"/api/motorista/minhas-viagens/{viagem_id}/ocorrencias",
+            headers=self.auth(tokens[0]),
+        )
+        self.assert_status(ocorrencias, 200)
+        evento_temporal = next(item for item in ocorrencias.get_json() if item["id"] == ocorrencia_id)
+        self.assertEqual(evento_temporal["data"], "08/11/2026 08:45")
+        self.assertEqual(evento_temporal["data_iso"], "2026-11-08T11:45:47Z")
+        criacao = self.client.post(
+            f"/api/motorista/minhas-viagens/{outra_id}/ocorrencias",
+            json={"descricao": "Ocorrência sem foto"},
+            headers=self.auth(tokens[1]),
+        )
+        self.assert_status(criacao, 201)
+        self.assertEqual(criacao.get_json()["mensagem"], "Ocorrência registrada!")
+        nova_ocorrencia_id = criacao.get_json()["ocorrencia_id"]
+        with self.app.app_context():
+            criada = self.db.session.get(self.OcorrenciaViagem, nova_ocorrencia_id)
+            self.assertIsNotNone(criada)
+            self.assertEqual(criada.viagem_id, outra_id)
+            self.assertEqual(self.AnexoOcorrenciaViagem.query.filter_by(ocorrencia_id=nova_ocorrencia_id).count(), 0)
+            self.assertEqual(self.db.session.get(self.Viagem, outra_id).status, "Saiu para entrega")
+        endpoint = f"/api/motorista/minhas-viagens/{viagem_id}/ocorrencias/{ocorrencia_id}/fotos"
+        def enviar(dados, nome="foto.jpg", mime="image/jpeg", caminho=endpoint, token=tokens[0]):
+            return self.client.post(caminho, data={"fotos": [(io.BytesIO(d), n, m) for d, n, m in dados]},
+                                    content_type="multipart/form-data", headers=self.auth(token))
+
+        jpeg = foto("JPEG", "red")
+        png = foto("PNG", "blue")
+        self.assert_status(self.client.get(endpoint), 401)
+        self.assert_status(self.client.get(endpoint, headers=self.auth(tokens[2])), 403)
+        self.assert_status(self.client.get(endpoint, headers=self.auth(tokens[1])), 404)
+        self.assert_status(self.client.get(f"/api/motorista/minhas-viagens/{viagem_id}/ocorrencias/{alheia_id}/fotos", headers=self.auth(tokens[0])), 404)
+        for dados in (
+            [(b"%PDF-1.4\n", "x.pdf", "application/pdf")],
+            [(b"RIFFxxxxWEBP", "x.webp", "image/webp")],
+            [(jpeg, "x.exe", "image/jpeg")],
+            [(jpeg, "x.jpg", "image/png")],
+            [(b"", "x.jpg", "image/jpeg")],
+            [(b"\xff\xd8\xff" + b"0" * (10 * 1024 * 1024), "x.jpg", "image/jpeg")],
+            [(jpeg, "ok.jpg", "image/jpeg"), (b"%PDF-1.4", "bad.pdf", "application/pdf")],
+        ):
+            self.assertIn(enviar(dados).status_code, {400, 413})
+        with self.app.app_context():
+            self.assertEqual(self.AnexoOcorrenciaViagem.query.filter_by(ocorrencia_id=ocorrencia_id).count(), 0)
+
+        self.limiter.limpar()
+        self.assert_status(enviar([(jpeg, "foto.jpg", "image/jpeg")], token=tokens[1]), 404)
+        self.assert_status(enviar([(jpeg, "foto.jpg", "image/jpeg")], token=tokens[2]), 403)
+        self.assert_status(enviar([(jpeg, "foto.jpg", "image/jpeg")], caminho=f"/api/motorista/minhas-viagens/{viagem_id}/ocorrencias/{alheia_id}/fotos"), 404)
+        primeira = enviar([(jpeg, "foto.jpg", "image/jpeg")])
+        self.assert_status(primeira, 201)
+        anexo_id = primeira.get_json()["anexos"][0]["id"]
+        self.assert_status(enviar([(jpeg, "foto.jpg", "image/jpeg")]), 200)
+        self.assert_status(enviar([(png, "foto.png", "image/png")]), 201)
+        self.assert_status(enviar([(jpeg, "foto.jpg", "image/jpeg")], caminho=f"/api/motorista/minhas-viagens/{viagem_id}/ocorrencias/{segunda_id}/fotos"), 201)
+        with self.app.app_context():
+            anexos = self.AnexoOcorrenciaViagem.query.filter_by(ocorrencia_id=ocorrencia_id).all()
+            self.assertEqual(len(anexos), 2)
+            self.assertTrue(all(a.visibilidade == "INTERNO" and a.motorista_id == motorista_id for a in anexos))
+            pasta = self.upload_dir / "ocorrencias"
+            with Image.open(pasta / anexos[0].nome_arquivo) as imagem:
+                imagem.load()
+                self.assertFalse(imagem.getexif())
+            self.assertEqual(anexos[0].hash_sha256, hashlib.sha256((pasta / anexos[0].nome_arquivo).read_bytes()).hexdigest())
+            self.assertEqual(anexos[0].tamanho_bytes, (pasta / anexos[0].nome_arquivo).stat().st_size)
+            self.assertEqual(len(list(pasta.iterdir())), 3)
+
+        download = f"/api/ocorrencias/fotos/{anexo_id}/download"
+        self.assert_status(self.client.get(download), 401)
+        self.assert_status(self.client.get(download, headers=self.auth(tokens[2])), 403)
+        self.assert_status(self.client.get(download, headers=self.auth(tokens[1])), 403)
+        valido = self.client.get(download, headers=self.auth(tokens[0]))
+        self.assert_status(valido, 200)
+        self.assertEqual(valido.mimetype, "image/jpeg")
+        self.assertEqual(valido.headers.get("X-Content-Type-Options"), "nosniff")
+        valido.close()
+        admin_download = self.client.get(download, headers=self.auth())
+        self.assert_status(admin_download, 200)
+        admin_download.close()
+        with self.app.app_context():
+            caminho = self.upload_dir / "ocorrencias" / self.db.session.get(self.AnexoOcorrenciaViagem, anexo_id).nome_arquivo
+        caminho.unlink()
+        self.assert_status(self.client.get(download, headers=self.auth(tokens[0])), 404)
+        self.assert_status(self.client.get(endpoint, headers=self.auth(tokens[0])), 200)
+
+        with self.app.app_context():
+            self.db.session.get(self.Viagem, viagem_id).status = "Saiu para entrega"
+            self.db.session.commit()
+        self.limiter.limpar()
+        for cor in ("green", "yellow", "black"):
+            self.assert_status(enviar([(foto("JPEG", cor), "nova.jpg", "image/jpeg")]), 201)
+        self.assert_status(enviar([(foto("JPEG", "white"), "sexta.jpg", "image/jpeg")]), 409)
+        with self.app.app_context():
+            self.assertEqual(self.AnexoOcorrenciaViagem.query.filter_by(ocorrencia_id=ocorrencia_id).count(), 5)
+            self.assertEqual(self.db.session.get(self.Viagem, viagem_id).status, "Saiu para entrega")
+            self.db.session.get(self.Viagem, viagem_id).status = "Planejada"
+            self.db.session.commit()
+        self.assert_status(enviar([(foto("JPEG", "white"), "inelegivel.jpg", "image/jpeg")], caminho=f"/api/motorista/minhas-viagens/{viagem_id}/ocorrencias/{segunda_id}/fotos"), 409)
+
+        with self.app.app_context():
+            self.db.session.get(self.Viagem, viagem_id).status = "Em trânsito"
+            self.db.session.commit()
+        self.limiter.limpar()
+        arquivos_antes = set((self.upload_dir / "ocorrencias").iterdir())
+        with patch.object(self.db.session, "commit", side_effect=RuntimeError("falha simulada")):
+            falha = enviar([(foto("JPEG", "purple"), "rollback.jpg", "image/jpeg")], caminho=f"/api/motorista/minhas-viagens/{viagem_id}/ocorrencias/{segunda_id}/fotos")
+        self.assert_status(falha, 500)
+        self.assertEqual(set((self.upload_dir / "ocorrencias").iterdir()), arquivos_antes)
+        with self.app.app_context():
+            self.assertEqual(self.AnexoOcorrenciaViagem.query.filter_by(ocorrencia_id=segunda_id).count(), 1)
 
     def test_upload_validation_and_private_download(self):
         with self.app.app_context():

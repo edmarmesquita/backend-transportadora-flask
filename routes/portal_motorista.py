@@ -362,17 +362,9 @@ def api_ocorrencias_viagem_motorista(id):
             "id": item.id,
             "descricao": item.descricao,
             "data": (
-                item.data_criacao.strftime(
-                    "%d/%m/%Y %H:%M"
-                )
-                if item.data_criacao
-                else ""
+                formatar_instante_utc_brasilia(item.data_criacao)
             ),
-            "data_iso": (
-                item.data_criacao.isoformat()
-                if item.data_criacao
-                else None
-            )
+            "data_iso": serializar_instante_utc(item.data_criacao)
         })
 
     return jsonify(lista), 200
@@ -1202,6 +1194,10 @@ def api_criar_ocorrencia_motorista(id):
 
         db.session.add(historico)
 
+        # O ID precisa existir antes do log e da resposta para permitir
+        # o upload opcional de fotos em uma chamada posterior.
+        db.session.flush()
+
         registrar_log(
             acao="Criação de ocorrência pelo motorista",
             detalhes=f"Ocorrência criada na viagem {viagem.id}.",
@@ -1216,7 +1212,8 @@ def api_criar_ocorrencia_motorista(id):
         db.session.commit()
 
         return jsonify({
-            "mensagem": "Ocorrência registrada!"
+            "mensagem": "Ocorrência registrada!",
+            "ocorrencia_id": ocorrencia.id,
         }), 201
 
     except Exception as erro:

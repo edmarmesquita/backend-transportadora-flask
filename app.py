@@ -221,7 +221,7 @@ from models.historicos import (
     HistoricoRastreamento,
     HistoricoViagem
 )
-from models.ocorrencias import OcorrenciaEntrega, OcorrenciaViagem
+from models.ocorrencias import OcorrenciaEntrega, OcorrenciaViagem, AnexoOcorrenciaViagem
 from models.comprovantes import ComprovanteEntrega, ArquivoComprovanteViagem
 from models.localizacoes import LocalizacaoMotorista, LocalizacaoViagem
 from models.avisos import AvisoChegada
@@ -243,6 +243,7 @@ from routes.portal_motorista import portal_motorista_bp
 from routes.admin_cargas import admin_cargas_bp
 from routes.admin_viagens import admin_viagens_bp
 from routes.comprovantes import comprovantes_bp
+from routes.fotos_ocorrencia import fotos_ocorrencia_bp
 from routes.configuracao_transportadora import configuracao_transportadora_bp
 
 app.register_blueprint(public_bp)
@@ -259,6 +260,7 @@ app.register_blueprint(portal_motorista_bp)
 app.register_blueprint(admin_cargas_bp)
 app.register_blueprint(admin_viagens_bp)
 app.register_blueprint(comprovantes_bp)
+app.register_blueprint(fotos_ocorrencia_bp)
 app.register_blueprint(configuracao_transportadora_bp)
 
 with app.app_context():
